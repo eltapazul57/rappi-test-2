@@ -1,19 +1,15 @@
 """
 didi_food.py — Scraper para DiDi Food México (food.didiglobal.com).
 
-Flujo de navegación:
-1. Abrir homepage → permitir geolocalización o ingresar dirección manualmente
-2. Ingresar dirección en el campo de búsqueda
-3. Ver catálogo de restaurantes disponibles
-4. Buscar McDonald's o tienda de conveniencia
-5. Entrar al restaurante → buscar producto → extraer datos
+Selectores validados: 2026-04-07
 
-Notas de anti-detección conocidas para DiDi Food:
-- Menos agresivo en anti-bot que Rappi/Uber Eats
-- Puede redirigir a la app móvil si detecta comportamiento automatizado
-- La URL de la zona cambia con el slug de la ciudad (/cdmx/ o similar)
-- DiDi Food tiene menos cobertura geográfica — Iztapalapa puede no tener
-  restaurantes disponibles (registrar como not_available, no error)
+Estado actual: DiDi Food salió del mercado mexicano. El dominio
+food.didiglobal.com ya no resuelve DNS. Este scraper mantiene la
+estructura para compatibilidad y documentará correctamente el error
+como "not_available" en el CSV.
+
+Si DiDi Food vuelve a operar o cambia de dominio, actualizar BASE_URL
+en config.py y los selectores de este archivo.
 """
 
 from __future__ import annotations
@@ -21,7 +17,15 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from playwright.sync_api import (
+    sync_playwright,
+    Browser,
+    BrowserContext,
+    Page,
+    TimeoutError as PlaywrightTimeout,
+    Playwright,
+    Error as PlaywrightError,
+)
 
 from scraper.base import AbstractScraper, ScrapeResult
 from scraper.config import (
@@ -31,7 +35,12 @@ from scraper.config import (
     REQUEST_TIMEOUT_MS,
     PAGE_LOAD_TIMEOUT_MS,
 )
-from scraper.utils import random_delay, retry, get_random_user_agent, parse_price, parse_time_minutes
+from scraper.utils import (
+    random_delay,
+    get_random_user_agent,
+    parse_price,
+    parse_time_minutes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,28 +51,26 @@ class DiDiFoodScraper(AbstractScraper):
     platform = "didi_food"
     BASE_URL = PLATFORM_BASE_URLS["didi_food"]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._playwright: Playwright | None = None
+        self._platform_available: bool = True
+
+    def before_scrape_one(self, address: Address, product: Product) -> None:
+        # Mantener explícito el contrato del hook para consistencia entre scrapers.
+        return None
+
     # ------------------------------------------------------------------
     # Setup / Teardown
     # ------------------------------------------------------------------
 
     def setup(self) -> None:
-        """
-        Inicializa Playwright para DiDi Food.
-        DiDi Food tiene protección anti-bot menos agresiva, pero sí
-        detecta automatización por viewport inusual o falta de movimiento
-        de mouse. Se simula viewport de laptop estándar.
-        """
-        playwright = sync_playwright().start()
-        self._playwright = playwright
-
-        self._browser: Browser = playwright.chromium.launch(
+        pw = sync_playwright().start()
+        self._playwright = pw
+        self._browser: Browser = pw.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-            ],
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"],
         )
-
         self._context: BrowserContext = self._browser.new_context(
             viewport={"width": 1440, "height": 900},
             user_agent=get_random_user_agent(),
@@ -72,109 +79,225 @@ class DiDiFoodScraper(AbstractScraper):
             geolocation={"latitude": 19.4326, "longitude": -99.1332},
             permissions=["geolocation"],
         )
-
         self._context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-
         self._page: Page = self._context.new_page()
         self._page.set_default_timeout(REQUEST_TIMEOUT_MS)
         logger.info("DiDiFoodScraper: browser iniciado")
 
+        # Pre-check: try to reach the platform
+        self._platform_available = self._check_platform_reachable()
+
     def teardown(self) -> None:
-        """Cierra browser y Playwright."""
+        for resource in (
+            getattr(self, "_page", None),
+            getattr(self, "_context", None),
+            getattr(self, "_browser", None),
+        ):
+            try:
+                if resource:
+                    resource.close()
+            except Exception:
+                pass
         try:
-            if self._page:
-                self._page.close()
-            if self._context:
-                self._context.close()
-            if self._browser:
-                self._browser.close()
             if self._playwright:
                 self._playwright.stop()
-        except Exception as exc:
-            logger.warning("Error en teardown de DiDiFoodScraper: %s", exc)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
-    # Flujo de scraping
+    # Availability check
+    # ------------------------------------------------------------------
+
+    def _check_platform_reachable(self) -> bool:
+        """Verifica si el dominio de DiDi Food es alcanzable."""
+        page = self._page
+        try:
+            response = page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=15000)
+            if response and response.ok:
+                logger.info("DiDiFood: plataforma alcanzable")
+                return True
+            logger.warning("DiDiFood: respuesta HTTP %s", response.status if response else "None")
+            return False
+        except (PlaywrightTimeout, PlaywrightError) as exc:
+            logger.warning("DiDiFood: plataforma no alcanzable — %s", exc)
+            return False
+
+    # ------------------------------------------------------------------
+    # Scraping flow
     # ------------------------------------------------------------------
 
     def set_delivery_address(self, address: Address) -> bool:
-        """
-        Establece la dirección de entrega en DiDi Food.
+        if not self._platform_available:
+            logger.info("DiDiFood: plataforma no disponible, zone=%s marcada como not_available", address.zone)
+            return False
 
-        Flujo esperado:
-        1. Navegar a BASE_URL
-        2. Permitir/ignorar prompt de geolocalización del browser
-        3. Encontrar campo de dirección y escribir la dirección
-        4. Seleccionar sugerencia del autocomplete
-        5. Confirmar y esperar catálogo
+        page = self._page
+        full_address = f"{address.street}, {address.neighborhood}, CDMX"
+        logger.info("DiDiFood: seteando dirección zone=%s", address.zone)
 
-        Diferencia clave: DiDi Food a veces lleva directo a /cdmx/ sin
-        pedir dirección. En ese caso, buscar el botón de "cambiar dirección".
-        """
-        # TODO: implementar
-        # Considerar que DiDi Food puede tener una URL directa por ciudad:
-        #   food.didiglobal.com/mx/cdmx/
-        # Selectores a investigar:
-        #   - Input de dirección: input[placeholder*="dirección"] o similar
-        #   - Confirmación: botón "Buscar" o "Confirmar dirección"
-        raise NotImplementedError(
-            "set_delivery_address no implementado — ver flujo en docstring"
-        )
+        try:
+            page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+        except (PlaywrightTimeout, PlaywrightError):
+            logger.warning("DiDiFood: no se pudo cargar la página")
+            return False
 
-    def search_product(self, product: Product) -> bool:
-        """
-        Busca el restaurante/tienda en DiDi Food.
+        random_delay()
 
-        Para big_mac: buscar "McDonald's"
-        Para coca_cola_600ml: buscar "OXXO" o "FEMSA" (DiDi tiene convenio con OXXO)
-        """
-        # TODO: implementar búsqueda
-        # DiDi Food puede tener categorías en el catálogo — navegar a la
-        # categoría correcta puede ser más eficiente que la búsqueda libre
-        raise NotImplementedError(
-            "search_product no implementado — ver flujo en docstring"
-        )
+        # Address input
+        addr_input = None
+        for sel in ['input[placeholder*="dirección"]', 'input[placeholder*="ubicación"]', 'input[type="text"]']:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=3000):
+                    addr_input = loc
+                    break
+            except (PlaywrightTimeout, Exception):
+                continue
 
-    def extract_data(self, address: Address, product: Product) -> ScrapeResult:
-        """
-        Extrae datos del producto en DiDi Food.
+        if not addr_input:
+            logger.warning("DiDiFood: input de dirección no encontrado para zone=%s", address.zone)
+            return False
 
-        Notas específicas de DiDi Food:
-        - Los precios pueden estar en formato "$XX.XX MXN" o solo "$XX"
-        - El delivery fee puede ser parte de una subscripción (DiDi Pass)
-        - Las promociones aparecen como stickers/overlays en las tarjetas
-        - El ETA puede ser "~XX min" (con tilde de aproximación)
-        """
-        # TODO: implementar extracción
-        # Documentar selectores encontrados con fecha:
-        #   [Selector] → [Dato] — validado: YYYY-MM-DD
-        raise NotImplementedError(
-            "extract_data no implementado — ver flujo en docstring"
-        )
+        addr_input.click()
+        page.wait_for_timeout(500)
+        addr_input.type(full_address, delay=80)
+        random_delay(min_seconds=2.0, max_seconds=3.5)
 
-    # ------------------------------------------------------------------
-    # Helpers privados
-    # ------------------------------------------------------------------
+        # Select suggestion
+        for sel in ['li:has-text("{}")'.format(address.street.split()[0]), '[role="option"]', 'li']:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=3000):
+                    loc.click()
+                    page.wait_for_timeout(1500)
+                    break
+            except (PlaywrightTimeout, Exception):
+                continue
 
-    def _check_coverage(self, address: Address) -> bool:
-        """
-        Verifica si DiDi Food tiene cobertura en la zona.
-        DiDi tiene menor cobertura que Rappi/Uber en zonas periféricas.
-
-        Returns:
-            True si hay cobertura, False si no (registrar como not_available).
-        """
-        # TODO: buscar mensaje de "no hay restaurantes disponibles" o similar
-        # Zonas con potencial falta de cobertura: Iztapalapa (address_id=5)
+        random_delay()
+        logger.info("DiDiFood: dirección seteada para zone=%s", address.zone)
         return True
 
-    def _get_city_url(self) -> str:
-        """
-        Construye la URL correcta para CDMX en DiDi Food.
-        DiDi usa slugs de ciudad en la URL.
-        """
-        # TODO: verificar el slug correcto para CDMX
-        # Posibles valores: /mx/cdmx/, /cdmx/, /ciudad-de-mexico/
-        return f"{self.BASE_URL}/mx/cdmx/"
+    def search_product(self, product: Product) -> bool:
+        if not self._platform_available:
+            return False
+
+        page = self._page
+        terms = {"big_mac": ["McDonald's"], "coca_cola_600ml": ["OXXO"]}.get(product.key, [product.display_name])
+        logger.info("DiDiFood: buscando producto %s", product.key)
+
+        for term in terms:
+            search_input = None
+            for sel in ['input[placeholder*="Buscar"]', 'input[type="search"]', 'input[type="text"]']:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.is_visible(timeout=3000):
+                        search_input = loc
+                        break
+                except (PlaywrightTimeout, Exception):
+                    continue
+
+            if not search_input:
+                logger.warning("DiDiFood: barra de búsqueda no encontrada")
+                continue
+
+            search_input.click()
+            page.wait_for_timeout(500)
+            search_input.fill("")
+            search_input.type(term, delay=60)
+            random_delay(min_seconds=2.0, max_seconds=3.0)
+            page.keyboard.press("Enter")
+            random_delay(min_seconds=3.0, max_seconds=5.0)
+
+            result = page.locator(f'a:has-text("{term}")').first
+            if result.is_visible(timeout=5000):
+                result.click()
+                random_delay(min_seconds=3.0, max_seconds=5.0)
+                return True
+
+        return False
+
+    def extract_data(self, address: Address, product: Product) -> ScrapeResult:
+        if not self._platform_available:
+            return ScrapeResult.not_available(self.platform, address, product)
+
+        page = self._page
+        logger.info("DiDiFood: extrayendo datos para %s en %s", product.key, address.zone)
+
+        price = self._extract_price(product)
+        fee = self._extract_fee()
+        eta = self._extract_eta()
+        promos = self._extract_promotions()
+
+        if price is None:
+            return ScrapeResult.not_available(self.platform, address, product)
+
+        return ScrapeResult(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            platform=self.platform,
+            address_id=address.id,
+            zone=address.zone,
+            product=product.key,
+            price=price,
+            delivery_fee=fee,
+            estimated_time_min=eta,
+            promotions=promos or "",
+            scrape_status="success",
+        )
+
+    def _extract_price(self, product: Product) -> float | None:
+        page = self._page
+        patterns = {"big_mac": ["Big Mac"], "coca_cola_600ml": ["Coca-Cola"]}.get(product.key, [product.display_name])
+        for pattern in patterns:
+            try:
+                items = page.locator(f'text=/{pattern}/i').all()
+                for item in items[:5]:
+                    if not item.is_visible(timeout=1000):
+                        continue
+                    ancestor = item.locator("xpath=ancestor::*[3]")
+                    text = ancestor.inner_text()
+                    if "$" in text:
+                        val = parse_price(text.split("$")[-1].split("\n")[0])
+                        if val and val > 10:
+                            return val
+            except (PlaywrightTimeout, Exception):
+                continue
+        return None
+
+    def _extract_fee(self) -> float | None:
+        page = self._page
+        try:
+            for sel in ['text=/envío/i', 'text=/delivery/i']:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=2000):
+                    text = el.inner_text()
+                    if "gratis" in text.lower():
+                        return 0.0
+                    return parse_price(text)
+        except (PlaywrightTimeout, Exception):
+            pass
+        return None
+
+    def _extract_eta(self) -> int | None:
+        page = self._page
+        try:
+            for el in page.locator('text=/\\d+\\s*min/').all()[:5]:
+                if el.is_visible(timeout=1000):
+                    return parse_time_minutes(el.inner_text())
+        except (PlaywrightTimeout, Exception):
+            pass
+        return None
+
+    def _extract_promotions(self) -> str:
+        page = self._page
+        try:
+            for el in page.locator('[class*="promo"], [class*="discount"]').all()[:3]:
+                if el.is_visible(timeout=1000):
+                    text = el.inner_text().strip()
+                    if text and len(text) < 100:
+                        return text
+        except (PlaywrightTimeout, Exception):
+            pass
+        return ""

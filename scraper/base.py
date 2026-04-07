@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -108,6 +108,13 @@ class AbstractScraper(ABC):
         self._context = None
         self._page = None
 
+    def before_scrape_one(self, address: Address, product: Product) -> None:
+        """
+        Hook opcional para resetear estado transitorio antes de cada scrape.
+        Las subclases pueden sobreescribirlo cuando guardan datos intermedios.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # Métodos abstractos — cada scraper los implementa
     # ------------------------------------------------------------------
@@ -177,6 +184,8 @@ class AbstractScraper(ABC):
             product.key,
         )
         try:
+            self.before_scrape_one(address, product)
+
             address_ok = self.set_delivery_address(address)
             if not address_ok:
                 return ScrapeResult.not_available(self.platform, address, product)
@@ -212,16 +221,46 @@ class AbstractScraper(ABC):
         """
         addresses = addresses or ADDRESSES
         products = products or PRODUCTS
+        combinations = [(address, product) for address in addresses for product in products]
         results: list[ScrapeResult] = []
 
+        setup_error: Exception | None = None
         try:
-            self.setup()
-            for address in addresses:
-                for product in products:
-                    result = self.scrape_one(address, product)
-                    results.append(result)
+            try:
+                self.setup()
+            except Exception as exc:
+                setup_error = exc
+                self.logger.error(
+                    "Error en setup de %s: %s",
+                    self.platform,
+                    exc,
+                    exc_info=True,
+                )
+
+            if setup_error is not None:
+                for address, product in combinations:
+                    results.append(
+                        ScrapeResult.error(
+                            self.platform,
+                            address,
+                            product,
+                            f"setup_failed: {setup_error}",
+                        )
+                    )
+                return results
+
+            for address, product in combinations:
+                result = self.scrape_one(address, product)
+                results.append(result)
         finally:
-            self.teardown()
+            try:
+                self.teardown()
+            except Exception as exc:
+                self.logger.warning(
+                    "Error en teardown de %s: %s",
+                    self.platform,
+                    exc,
+                )
 
         self.logger.info(
             "%s: %d resultados (%d exitosos, %d errores)",

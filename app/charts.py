@@ -1,18 +1,10 @@
 """
-charts.py — Funciones de visualización con Plotly para el dashboard.
+charts.py — Visualizaciones Plotly para el dashboard.
 
-Cada función recibe un DataFrame (ya filtrado/procesado) y devuelve
-una figura de Plotly lista para renderizar con st.plotly_chart().
-
-Las 3 visualizaciones principales:
-1. chart_total_cost_by_zone: precio del producto + delivery fee por zona y plataforma
-2. chart_eta_heatmap: ETA (minutos) como heatmap zona × plataforma
-3. chart_fee_comparison: comparación de delivery fees por plataforma
-
-Paleta de colores por plataforma (consistente en todos los charts):
-    Rappi    → #FF441F  (naranja Rappi)
-    Uber Eats → #06C167  (verde Uber Eats)
-    DiDi Food → #FF5C35  (naranja DiDi, levemente diferente)
+3 charts principales:
+1. chart_total_cost_by_zone: barras agrupadas de costo total por zona y plataforma
+2. chart_eta_heatmap: heatmap de ETA zona × plataforma
+3. chart_fee_comparison: box plot de delivery fees por plataforma
 """
 
 from __future__ import annotations
@@ -21,19 +13,26 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Paleta de colores consistente para las 3 plataformas
 PLATFORM_COLORS: dict[str, str] = {
     "rappi": "#FF441F",
     "uber_eats": "#06C167",
-    "didi_food": "#FF5C35",
+    "didi_food": "#FF8C00",
 }
 
-# Nombres legibles para etiquetas en los charts
 PLATFORM_LABELS: dict[str, str] = {
     "rappi": "Rappi",
     "uber_eats": "Uber Eats",
     "didi_food": "DiDi Food",
 }
+
+# Orden geográfico norte → sur
+ZONE_ORDER: list[str] = [
+    "polanco",
+    "condesa_roma",
+    "centro_historico",
+    "coyoacan",
+    "iztapalapa",
+]
 
 ZONE_LABELS: dict[str, str] = {
     "polanco": "Polanco",
@@ -45,12 +44,7 @@ ZONE_LABELS: dict[str, str] = {
 
 
 def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Prepara el DataFrame para visualización:
-    - Filtra solo filas con status 'success'
-    - Agrega columna 'total_cost' (price + delivery_fee)
-    - Agrega etiquetas legibles de plataforma y zona
-    """
+    """Filtra success, agrega total_cost y etiquetas legibles."""
     df = df[df["scrape_status"] == "success"].copy()
     df["total_cost"] = df["price"].fillna(0) + df["delivery_fee"].fillna(0)
     df["platform_label"] = df["platform"].map(PLATFORM_LABELS).fillna(df["platform"])
@@ -58,128 +52,153 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
-# Chart 1: Costo total por zona y plataforma
-# ---------------------------------------------------------------------------
-
 def chart_total_cost_by_zone(
     df: pd.DataFrame,
     product_key: str = "big_mac",
     title: str | None = None,
 ) -> go.Figure:
-    """
-    Gráfico de barras agrupadas: costo total (precio + fee) por zona y plataforma.
+    """Barras agrupadas: costo total (precio + fee) por zona y plataforma."""
+    prepared = _prepare_df(df)
+    prepared = prepared[prepared["product"] == product_key]
 
-    Este es el chart de mayor impacto para el informe de insights porque
-    muestra directamente qué plataforma es más cara para el usuario final
-    en cada zona geográfica.
+    if prepared.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos para este producto", showarrow=False)
+        return fig
 
-    Args:
-        df: DataFrame completo (sin filtrar).
-        product_key: 'big_mac' o 'coca_cola_600ml'.
-        title: título del chart (auto-generado si None).
+    # Ordenar zonas geográficamente
+    zone_order_labels = [ZONE_LABELS.get(z, z) for z in ZONE_ORDER if z in prepared["zone"].values]
+    prepared["zone_label"] = pd.Categorical(
+        prepared["zone_label"], categories=zone_order_labels, ordered=True
+    )
+    prepared = prepared.sort_values("zone_label")
 
-    Returns:
-        Figura Plotly lista para st.plotly_chart().
-    """
-    # TODO: implementar
-    # 1. Filtrar por product_key y status == 'success'
-    # 2. Calcular total_cost = price + delivery_fee
-    # 3. Usar px.bar() con barmode='group', color='platform_label'
-    # 4. Ordenar zonas por la lógica geográfica de norte a sur (polanco → iztapalapa)
-    # 5. Agregar anotaciones de precio encima de cada barra
-    raise NotImplementedError("chart_total_cost_by_zone no implementado")
+    color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in prepared["platform"].values}
 
+    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
 
-# ---------------------------------------------------------------------------
-# Chart 2: Heatmap de ETAs por zona × plataforma
-# ---------------------------------------------------------------------------
+    fig = px.bar(
+        prepared,
+        x="zone_label",
+        y="total_cost",
+        color="platform_label",
+        barmode="group",
+        color_discrete_map=color_map,
+        text=prepared["total_cost"].apply(lambda x: f"${x:.0f}"),
+        labels={
+            "zone_label": "Zona",
+            "total_cost": "Costo Total (MXN)",
+            "platform_label": "Plataforma",
+        },
+        title=title or f"Costo Total al Usuario — {product_name}",
+    )
+
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+        xaxis_title="",
+        yaxis_title="Costo Total (MXN)",
+        legend_title="Plataforma",
+        height=450,
+    )
+
+    return fig
+
 
 def chart_eta_heatmap(
     df: pd.DataFrame,
     product_key: str = "big_mac",
     title: str | None = None,
 ) -> go.Figure:
-    """
-    Heatmap de calor: ETA promedio (minutos) por zona (eje Y) y plataforma (eje X).
+    """Heatmap: ETA (minutos) por zona (Y) y plataforma (X)."""
+    prepared = _prepare_df(df)
+    prepared = prepared[prepared["product"] == product_key]
 
-    Este chart muestra de forma inmediata qué plataforma es más rápida
-    en cada zona. El gradiente de color hace evidente los patrones geográficos.
+    if prepared.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos para este producto", showarrow=False)
+        return fig
 
-    Args:
-        df: DataFrame completo (sin filtrar).
-        product_key: producto a analizar.
-        title: título del chart.
+    pivot = prepared.pivot_table(
+        values="estimated_time_min",
+        index="zone",
+        columns="platform",
+        aggfunc="mean",
+    )
 
-    Returns:
-        Figura Plotly lista para st.plotly_chart().
-    """
-    # TODO: implementar
-    # 1. Filtrar por product_key y status == 'success'
-    # 2. Pivotar: zonas en filas, plataformas en columnas, ETA como valores
-    # 3. Usar go.Heatmap() con colorscale='RdYlGn_r' (rojo=lento, verde=rápido)
-    # 4. Manejar NaN (not_available) mostrando celda gris con texto "N/D"
-    raise NotImplementedError("chart_eta_heatmap no implementado")
+    # Ordenar zonas y plataformas
+    zone_order_filtered = [z for z in ZONE_ORDER if z in pivot.index]
+    pivot = pivot.reindex(index=zone_order_filtered)
 
+    platform_order = [p for p in ["rappi", "uber_eats", "didi_food"] if p in pivot.columns]
+    pivot = pivot[platform_order]
 
-# ---------------------------------------------------------------------------
-# Chart 3: Comparación de delivery fees
-# ---------------------------------------------------------------------------
+    # Labels legibles
+    y_labels = [ZONE_LABELS.get(z, z) for z in pivot.index]
+    x_labels = [PLATFORM_LABELS.get(p, p) for p in pivot.columns]
+
+    # Texto para cada celda
+    text_matrix = pivot.copy()
+    text_matrix = text_matrix.map(
+        lambda v: f"{v:.0f} min" if pd.notna(v) else "N/D"
+    )
+
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=x_labels,
+        y=y_labels,
+        text=text_matrix.values,
+        texttemplate="%{text}",
+        colorscale="RdYlGn_r",  # rojo=lento, verde=rápido
+        hoverongaps=False,
+        colorbar=dict(title="Minutos"),
+    ))
+
+    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
+
+    fig.update_layout(
+        title=title or f"Tiempo de Entrega — {product_name}",
+        xaxis_title="",
+        yaxis_title="",
+        height=400,
+    )
+
+    return fig
+
 
 def chart_fee_comparison(
     df: pd.DataFrame,
     title: str | None = None,
 ) -> go.Figure:
-    """
-    Box plot o violin chart: distribución de delivery fees por plataforma
-    a lo largo de todas las zonas.
+    """Box plot: distribución de delivery fees por plataforma."""
+    prepared = _prepare_df(df)
+    prepared = prepared.dropna(subset=["delivery_fee"])
 
-    Este chart muestra la consistencia/variabilidad del fee de cada
-    plataforma — una plataforma con fee variable puede estar aplicando
-    surge pricing geográfico (insight accionable para Rappi).
+    if prepared.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos de delivery fee", showarrow=False)
+        return fig
 
-    Args:
-        df: DataFrame completo (sin filtrar).
-        title: título del chart.
+    color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in prepared["platform"].values}
 
-    Returns:
-        Figura Plotly lista para st.plotly_chart().
-    """
-    # TODO: implementar
-    # 1. Filtrar status == 'success'
-    # 2. Usar px.box() o px.violin() con color='platform_label'
-    # 3. Agregar puntos individuales (jitter) para ver la distribución real
-    # 4. Ordenar plataformas de menor a mayor fee promedio
-    raise NotImplementedError("chart_fee_comparison no implementado")
+    fig = px.box(
+        prepared,
+        x="platform_label",
+        y="delivery_fee",
+        color="platform_label",
+        color_discrete_map=color_map,
+        points="all",
+        labels={
+            "platform_label": "Plataforma",
+            "delivery_fee": "Delivery Fee (MXN)",
+        },
+        title=title or "Distribución de Delivery Fees",
+    )
 
+    fig.update_layout(
+        xaxis_title="",
+        yaxis_title="Fee (MXN)",
+        showlegend=False,
+        height=400,
+    )
 
-# ---------------------------------------------------------------------------
-# Chart bonus: Radar de competitividad por zona
-# ---------------------------------------------------------------------------
-
-def chart_competitiveness_radar(
-    df: pd.DataFrame,
-    zone: str = "polanco",
-    title: str | None = None,
-) -> go.Figure:
-    """
-    Radar/spider chart: comparación multidimensional (precio, fee, ETA)
-    para una zona específica.
-
-    Chart bonus para el informe de insights — muestra la posición
-    competitiva de cada plataforma en múltiples dimensiones simultáneamente.
-
-    Args:
-        df: DataFrame completo (sin filtrar).
-        zone: zona a analizar (key de config.py).
-        title: título del chart.
-
-    Returns:
-        Figura Plotly lista para st.plotly_chart().
-    """
-    # TODO: implementar (opcional — solo si hay tiempo)
-    # 1. Filtrar por zona y status == 'success'
-    # 2. Normalizar precio, fee y ETA a escala 0-1 (0 = mejor, 1 = peor)
-    # 3. Usar go.Scatterpolar() con fill='toself'
-    # 4. Una traza por plataforma
-    raise NotImplementedError("chart_competitiveness_radar no implementado")
+    return fig

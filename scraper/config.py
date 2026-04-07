@@ -15,7 +15,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
 OUTPUT_CSV = DATA_DIR / "competitive_data.csv"
-BACKUP_CSV = DATA_DIR / "competitive_data_backup.csv"
 
 # ---------------------------------------------------------------------------
 # Rate limiting (segundos)
