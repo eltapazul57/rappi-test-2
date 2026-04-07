@@ -8,7 +8,6 @@ LOG_DIR="$ROOT_DIR/logs"
 LOG_FILE="$LOG_DIR/scrape_loop.log"
 
 INTERVAL_MINUTES="${INTERVAL_MINUTES:-60}"
-PLATFORMS="${PLATFORMS:-rappi uber_eats didi_food}"
 ONCE=false
 
 if [[ "${1:-}" == "--once" ]]; then
@@ -17,11 +16,23 @@ fi
 
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Iniciando scrape_loop.sh" | tee -a "$LOG_FILE"
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Plataformas: $PLATFORMS" | tee -a "$LOG_FILE"
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Intervalo: ${INTERVAL_MINUTES} min" | tee -a "$LOG_FILE"
+# Resolve Python: prefer venv, fall back to system python3
+if [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
+  PYTHON="$ROOT_DIR/.venv/bin/python"
+elif command -v python3 &>/dev/null; then
+  PYTHON="python3"
+else
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: no se encontró Python. Instala el entorno virtual." | tee -a "$LOG_FILE"
+  exit 1
+fi
 
-read -r -a PLATFORM_ARGS <<< "$PLATFORMS"
+# Platforms to scrape — override via env var (space-separated), default to all three
+IFS=' ' read -r -a PLATFORM_ARGS <<< "${PLATFORMS:-rappi uber_eats didi_food}"
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Iniciando scrape_loop.sh" | tee -a "$LOG_FILE"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Python: $PYTHON" | tee -a "$LOG_FILE"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Plataformas: ${PLATFORM_ARGS[*]}" | tee -a "$LOG_FILE"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Intervalo: ${INTERVAL_MINUTES} min" | tee -a "$LOG_FILE"
 
 run_cycle() {
   local ts csv_backup_path
@@ -29,7 +40,7 @@ run_cycle() {
 
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Ejecutando scraping..." | tee -a "$LOG_FILE"
 
-  if (cd "$ROOT_DIR" && python -m scraper.runner --append --platforms "${PLATFORM_ARGS[@]}") >> "$LOG_FILE" 2>&1; then
+  if (cd "$ROOT_DIR" && "$PYTHON" -m scraper.runner --append --platforms "${PLATFORM_ARGS[@]}") >> "$LOG_FILE" 2>&1; then
     csv_backup_path="$BACKUP_DIR/competitive_data_${ts}.csv"
 
     if [[ -f "$DATA_DIR/competitive_data.csv" ]]; then

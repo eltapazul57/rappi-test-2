@@ -12,7 +12,6 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from scraper.config import Address, Product, ADDRESSES, PRODUCTS
 
@@ -34,9 +33,9 @@ class ScrapeResult:
     address_id: int
     zone: str
     product: str
-    price: Optional[float]
-    delivery_fee: Optional[float]
-    estimated_time_min: Optional[int]
+    price: float | None
+    delivery_fee: float | None
+    estimated_time_min: int | None
     promotions: str = ""
     scrape_status: str = "success"  # "success" | "error" | "not_available"
     error_message: str = ""         # solo se llena si scrape_status == "error"

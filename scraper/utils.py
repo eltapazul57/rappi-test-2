@@ -4,25 +4,20 @@ utils.py — Utilidades compartidas para los scrapers.
 Incluye:
 - setup_logging(): configura el logger raíz con formato consistente
 - random_delay(): sleep aleatorio entre RATE_LIMIT_MIN y RATE_LIMIT_MAX
-- retry(): decorador de reintentos con backoff exponencial (sin dependencias externas)
 - get_random_user_agent(): rota User-Agents para evitar fingerprinting
 - parse_price(): normaliza strings de precio a float (maneja "$89.00", "89", "89,00")
 """
 
 from __future__ import annotations
 
-import functools
 import logging
 import random
 import re
 import time
-from typing import Callable, TypeVar
 
 from scraper.config import RATE_LIMIT_MIN, RATE_LIMIT_MAX, USER_AGENTS
 
 logger = logging.getLogger(__name__)
-
-F = TypeVar("F", bound=Callable)
 
 
 # ---------------------------------------------------------------------------
@@ -62,64 +57,6 @@ def random_delay(
     delay = random.uniform(min_seconds, max_seconds)
     logger.debug("Rate limit delay: %.2fs", delay)
     time.sleep(delay)
-
-
-# ---------------------------------------------------------------------------
-# Retry decorator
-# ---------------------------------------------------------------------------
-
-def retry(
-    max_attempts: int = 3,
-    base_delay: float = 2.0,
-    exceptions: tuple[type[Exception], ...] = (Exception,),
-) -> Callable[[F], F]:
-    """
-    Decorador de reintentos con backoff exponencial.
-
-    Args:
-        max_attempts: número máximo de intentos (incluyendo el primero)
-        base_delay: segundos de espera base; se multiplica por 2^intento
-        exceptions: tupla de excepciones que disparan el retry
-
-    Uso:
-        @retry(max_attempts=3, exceptions=(TimeoutError, PlaywrightError))
-        def mi_funcion():
-            ...
-
-    Decisión: implementado sin tenacity para no agregar dependencias.
-    El backoff exponencial (2, 4, 8s) es suficiente para el volumen bajo
-    de este proyecto (~30 requests por ejecución).
-    """
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception: Exception | None = None
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as exc:
-                    last_exception = exc
-                    if attempt == max_attempts:
-                        logger.error(
-                            "%s falló después de %d intentos: %s",
-                            func.__name__,
-                            max_attempts,
-                            exc,
-                        )
-                        raise
-                    wait = base_delay * (2 ** (attempt - 1))
-                    logger.warning(
-                        "%s — intento %d/%d falló (%s). Reintentando en %.1fs...",
-                        func.__name__,
-                        attempt,
-                        max_attempts,
-                        exc,
-                        wait,
-                    )
-                    time.sleep(wait)
-            raise last_exception  # nunca llega aquí, pero satisface el type checker
-        return wrapper  # type: ignore[return-value]
-    return decorator
 
 
 # ---------------------------------------------------------------------------

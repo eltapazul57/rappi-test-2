@@ -307,7 +307,7 @@ class UberEatsScraper(AbstractScraper):
         # If we're on the restaurant page, try to extract from there too
         if "challenge" not in page.url:
             if price is None:
-                price = self._extract_price_from_restaurant(product)
+                price = self._extract_product_price(product)
             if fee is None:
                 fee = self._extract_fee_from_restaurant()
             if eta is None:
@@ -370,10 +370,6 @@ class UberEatsScraper(AbstractScraper):
         except (PlaywrightTimeout, Exception):
             pass
         return None
-
-    def _extract_price_from_restaurant(self, product: Product) -> float | None:
-        """Fallback price extraction from restaurant page."""
-        return self._extract_product_price(product)
 
     def _extract_fee_from_restaurant(self) -> float | None:
         page = self._page

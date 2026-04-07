@@ -8,7 +8,7 @@ Sistema local de inteligencia competitiva que recolecta precios, delivery fees y
 
 ### Requisitos
 - Python 3.11+
-- Conexión a internet (para scraping real) o datos de backup pre-generados
+- Conexión a internet para scraping real
 
 ### Instalación
 
@@ -45,13 +45,7 @@ Output: `data/competitive_data.csv`
 python -m scraper.runner --platforms rappi uber_eats
 ```
 
-### Opción C — Modo dry-run (sin scraping real, usa datos de backup)
-```bash
-python -m scraper.runner --dry-run
-```
-Útil para demo cuando las plataformas están aplicando bloqueos anti-bot.
-
-### Opción D — Append (agrega al CSV sin sobreescribir)
+### Opción C — Append (agrega al CSV sin sobreescribir)
 ```bash
 python -m scraper.runner --append
 ```
@@ -67,7 +61,7 @@ streamlit run app/app.py
 
 El dashboard abre automáticamente en `http://localhost:8501`.
 
-**El dashboard siempre funciona**: si no existe `data/competitive_data.csv`, carga automáticamente `data/competitive_data_backup.csv` con datos pre-generados.
+Si no existe `data/competitive_data.csv`, el dashboard muestra estado vacío e invita a ejecutar el scraper.
 
 ### Pestañas del dashboard
 - **Datos & Scraping**: tabla interactiva, KPIs, botón para ejecutar el scraper desde la UI
@@ -88,8 +82,7 @@ El dashboard abre automáticamente en `http://localhost:8501`.
 │   ├── runner.py       # Orquestador CLI
 │   └── utils.py        # Rate limiting, retry, logging, parseo de precios
 ├── data/
-│   ├── competitive_data.csv          # Output del scraper (generado)
-│   └── competitive_data_backup.csv   # Datos pre-generados (siempre disponible)
+│   └── competitive_data.csv          # Output del scraper (generado)
 ├── app/
 │   ├── app.py          # Dashboard Streamlit
 │   └── charts.py       # Visualizaciones Plotly
@@ -117,7 +110,7 @@ El dashboard abre automáticamente en `http://localhost:8501`.
 
 ## Limitaciones conocidas
 
-1. **Anti-bot**: Las 3 plataformas detectan automatización. El scraping puede fallar. Usar `--dry-run` si ocurre en demo.
+1. **Anti-bot**: Las 3 plataformas detectan automatización. El scraping puede fallar.
 
 2. **Selectores CSS frágiles**: Cualquier deploy de las plataformas puede romper los scrapers. Los selectores fueron validados en la fecha indicada en cada archivo `scraper/*.py`.
 
@@ -157,9 +150,9 @@ playwright install chromium
 ```
 
 ### El dashboard muestra datos vacíos
-Verificar que `data/competitive_data_backup.csv` existe. Si no:
+Ejecutar un scraping real para generar datos:
 ```bash
-python -m scraper.runner --dry-run
+python -m scraper.runner
 ```
 
 ---
