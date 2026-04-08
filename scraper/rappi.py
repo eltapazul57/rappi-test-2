@@ -338,36 +338,86 @@ class RappiScraper(AbstractScraper):
         self._store_promo = ""
 
         try:
-            # Rappi search cards include: "name\n\nETA\n•\n$fee\n•\nrating\npromo"
+            # Rappi search cards structure (each line separated by \n):
+            #   "McDonald's Polanco\n4.5\n12 min\n•\nEnvío Gratis\n•\nAplican TyC"
+            #   "McDonald's Roma\n4.3\n18 min\n•\n$ 29.00\n•\n..."
+            # The fee appears AFTER the ETA and a bullet separator.
+            # The raw "$" before the fee could be confused with a product price,
+            # so we parse line-by-line and use context.
+
             card = page.locator(f'a:has-text("{term}")').first
             if not card.is_visible(timeout=3000):
-                return
+                card = page.locator('a[href*="/tienda/"], a[href*="/store/"]').first
+                if not card.is_visible(timeout=2000):
+                    return
             card_text = card.inner_text()
+            lines = [l.strip() for l in card_text.split("\n") if l.strip()]
 
-            # ETA: "12 min"
-            eta_match = re.search(r"(\d+)\s*min", card_text)
+            # ETA: "12 min" or "12-18 min"
+            eta_match = re.search(r"(\d+)\s*(?:[-–]\s*\d+\s*)?min", card_text)
             if eta_match:
-                self._store_eta = int(eta_match.group(1))
+                self._store_eta = parse_time_minutes(eta_match.group(0))
 
-            # Fee: "Envío Gratis", "$ 0.00", "$ 29.00"
-            if re.search(r"env[íi]o\s*gratis", card_text, re.IGNORECASE):
-                self._store_fee = 0.0
-            else:
-                fee_match = re.search(r"\$\s*([\d,.]+)", card_text)
-                if fee_match:
-                    self._store_fee = parse_price(f"${fee_match.group(1)}")
+            # Fee: Look for fee-specific patterns line by line.
+            # The fee line typically comes after ETA and a "•" separator.
+            # It shows as "Envío Gratis", "$ 0.00", "$ 29.00", "Gratis", etc.
+            found_eta = False
+            for line in lines:
+                line_lower = line.lower()
 
-            # Promo: "Envío Gratis" or similar
-            promo_patterns = ["Envío [Gg]ratis", "descuento", "Aplican TyC", "primer pedido"]
-            for pat in promo_patterns:
-                m = re.search(pat, card_text, re.IGNORECASE)
-                if m:
-                    # Get the full line containing the promo
-                    for line in card_text.split("\n"):
-                        if re.search(pat, line, re.IGNORECASE):
-                            self._store_promo = line.strip()
-                            break
+                # Track when we've passed the ETA line
+                if re.search(r"\d+\s*min", line):
+                    found_eta = True
+                    continue
+
+                # Skip separator bullets
+                if line in ("•", "·", "|"):
+                    continue
+
+                # "Envío Gratis" or "Gratis" on its own line
+                if re.search(r"env[íi]o\s*gratis|^gratis$", line_lower):
+                    self._store_fee = 0.0
                     break
+
+                # "$ 0.00" after ETA = free delivery
+                if found_eta and re.match(r"^\$\s*0[.,]?0*$", line.strip()):
+                    self._store_fee = 0.0
+                    break
+
+                # "$ 29.00" after ETA = delivery fee (not a product price)
+                if found_eta and re.match(r"^\$\s*[\d,.]+$", line.strip()):
+                    val = parse_price(line.strip())
+                    if val is not None and val < 100:  # fees are typically < $100
+                        self._store_fee = val
+                        break
+
+                # Explicit label: "Envío $ 29" or "Envío de $ 15"
+                fee_label = re.search(r"env[íi]o\s*(?:de\s*)?\$\s*([\d,.]+)", line_lower)
+                if fee_label:
+                    self._store_fee = parse_price(f"${fee_label.group(1)}")
+                    break
+
+            # --- Promos ---
+            promos = []
+            promo_patterns = [
+                r"env[íi]o\s*gratis",
+                r"descuento",
+                r"aplican\s*TyC",
+                r"primer\s*pedido",
+                r"\d+%\s*(?:de\s*)?desc",
+                r"2\s*x\s*1",
+                r"ahorra",
+                r"oferta",
+                r"promo",
+                r"gratis",
+            ]
+            for line in lines:
+                for pat in promo_patterns:
+                    if re.search(pat, line, re.IGNORECASE):
+                        if line not in promos and len(line) < 100:
+                            promos.append(line)
+                        break
+            self._store_promo = "; ".join(promos[:3]) if promos else ""
 
             logger.info("Rappi search card: fee=%s eta=%s promo='%s'",
                         self._store_fee, self._store_eta, self._store_promo)
@@ -459,30 +509,46 @@ class RappiScraper(AbstractScraper):
         """Extrae delivery fee de la página del restaurante."""
         page = self._page
         try:
-            # Try "Envío Gratis" text nodes first
-            gratis = page.locator('text=/[Ee]nv[íi]o [Gg]ratis/').first
+            # 1. "Envío Gratis" / "Entrega Gratis" wins immediately
+            gratis = page.locator(r'text=/[Ee]nv[íi]o\s*[Gg]ratis|[Ee]ntrega\s*[Gg]ratis/').first
             if gratis.is_visible(timeout=2000):
                 return 0.0
 
-            # Then look for "Envío" followed by a price on the same element or nearby
-            envio_els = page.locator('text=/[Ee]nv[íi]o/').all()
-            for el in envio_els[:5]:
-                try:
-                    if not el.is_visible(timeout=500):
+            # 2. Look for fee labels and extract the price nearby
+            for sel in [
+                r'text=/[Cc]osto de env[íi]o/',
+                r'text=/[Tt]arifa de entrega/',
+                'text=/[Ee]nv[íi]o/',
+            ]:
+                for el in page.locator(sel).all()[:5]:
+                    try:
+                        if not el.is_visible(timeout=500):
+                            continue
+                        text = el.inner_text()
+                        if re.search(r"gratis|free", text, re.IGNORECASE):
+                            return 0.0
+                        # Extract price from the element text itself
+                        fee_match = re.search(r"\$\s*([\d,.]+)", text)
+                        if fee_match:
+                            val = parse_price(f"${fee_match.group(1)}")
+                            if val is not None and val < 100:
+                                return val
+                        # Try parent and sibling which may contain the price value
+                        for xpath in ["xpath=..", "xpath=following-sibling::*[1]"]:
+                            try:
+                                related = el.locator(xpath)
+                                related_text = related.inner_text()
+                                if re.search(r"gratis|free|\$\s*0\b", related_text, re.IGNORECASE):
+                                    return 0.0
+                                fee_match = re.search(r"\$\s*([\d,.]+)", related_text)
+                                if fee_match:
+                                    val = parse_price(f"${fee_match.group(1)}")
+                                    if val is not None and val < 100:
+                                        return val
+                            except Exception:
+                                continue
+                    except Exception:
                         continue
-                    text = el.inner_text()
-                    if "gratis" in text.lower():
-                        return 0.0
-                    price = parse_price(text)
-                    if price is not None:
-                        return price
-                    # Try the parent element which may include the price
-                    parent_text = el.locator("xpath=..").inner_text()
-                    price = parse_price(parent_text)
-                    if price is not None:
-                        return price
-                except Exception:
-                    continue
         except (PlaywrightTimeout, Exception):
             pass
         return None

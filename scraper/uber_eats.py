@@ -228,45 +228,72 @@ class UberEatsScraper(AbstractScraper):
         logger.info("UberEats: buscando producto %s", product.key)
 
         for term in terms:
-            # Dismiss overlays BEFORE locating the search input
             self._dismiss_popups()
 
-            # Try multiple selectors — Uber Eats placeholder varies by locale
-            search_input = page.locator(
-                'input[placeholder*="Buscar"], input[placeholder*="Search"], '
-                'input[type="search"], input[data-testid*="search"], '
-                'input[placeholder*="Busca"]'
-            ).first
-            try:
-                search_input.wait_for(state="visible", timeout=8000)
-            except Exception:
-                logger.warning("UberEats: barra de búsqueda no visible para '%s' — url=%s", term, page.url)
-                # Log all inputs to find the correct selector
+            # Strategy 1: Try clicking the search icon/button to mount the input.
+            # Uber Eats renders a clickable search element that only mounts the
+            # <input> after interaction.
+            search_input = None
+            for search_trigger in [
+                'a[href*="/search"]',
+                'button[aria-label*="earch"]',
+                'button[aria-label*="uscar"]',
+                '[data-testid*="search"]',
+            ]:
+                trigger = page.locator(search_trigger).first
                 try:
-                    all_inputs = page.locator("input").all()
-                    logger.warning("  Total inputs en página: %d", len(all_inputs))
-                    for i, inp in enumerate(all_inputs[:10]):
+                    if trigger.is_visible(timeout=2000):
+                        trigger.click()
+                        page.wait_for_timeout(1500)
+                        # Now look for the input that should have appeared
+                        search_input = page.locator(
+                            'input[placeholder*="Buscar"], input[placeholder*="Search"], '
+                            'input[type="search"], input[placeholder*="Busca"]'
+                        ).first
                         try:
-                            logger.warning("  input[%d]: type=%s placeholder=%s visible=%s",
-                                i, inp.get_attribute("type"), inp.get_attribute("placeholder"),
-                                inp.is_visible(timeout=200))
+                            search_input.wait_for(state="visible", timeout=3000)
+                            break
                         except Exception:
-                            pass
+                            search_input = None
                 except Exception:
-                    pass
-                self._screenshot(f"no_search_input_{term.replace(' ', '_')}")
-                continue
+                    continue
 
-            search_input.scroll_into_view_if_needed()
-            search_input.click()
-            page.wait_for_timeout(500)
-            search_input.fill("")
-            page.wait_for_timeout(300)
-            search_input.type(term, delay=60)
-            random_delay(min_seconds=2.0, max_seconds=3.0)
-            page.keyboard.press("Enter")
-            random_delay(min_seconds=3.0, max_seconds=5.0)
-            self._wait_for_page_ready()
+            # Strategy 2: If input appeared, use it
+            if search_input is not None:
+                try:
+                    search_input.scroll_into_view_if_needed()
+                    search_input.click()
+                    page.wait_for_timeout(500)
+                    search_input.fill("")
+                    page.wait_for_timeout(300)
+                    search_input.type(term, delay=60)
+                    random_delay(min_seconds=2.0, max_seconds=3.0)
+                    page.keyboard.press("Enter")
+                    random_delay(min_seconds=3.0, max_seconds=5.0)
+                    self._wait_for_page_ready()
+                except Exception as exc:
+                    logger.warning("UberEats: error usando search input: %s", exc)
+                    # Fall through to Strategy 3
+                    search_input = None
+
+            # Strategy 3: Navigate directly to the search results URL.
+            # The feed page often has 0 <input> elements — bypass entirely.
+            if search_input is None:
+                logger.info("UberEats: no search input, navegando a URL de búsqueda directa")
+                from urllib.parse import urlencode, urlparse, parse_qs
+                current = page.url
+                # Preserve the pl= param (encoded address)
+                parsed = urlparse(current)
+                params = parse_qs(parsed.query)
+                search_params: dict[str, str] = {"q": term}
+                if "pl" in params:
+                    search_params["pl"] = params["pl"][0]
+                search_url = f"{self.BASE_URL}/search?{urlencode(search_params)}"
+                logger.info("UberEats: navegando a %s", search_url)
+                page.goto(search_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+                self._wait_for_page_ready()
+                self._dismiss_popups()
+                random_delay(min_seconds=2.0, max_seconds=4.0)
 
             # Extract store info from search result cards
             self._extract_store_info_from_search(term)
@@ -294,6 +321,7 @@ class UberEatsScraper(AbstractScraper):
                 return True
 
             logger.warning("UberEats: no se encontró resultado para '%s'", term)
+            self._screenshot(f"no_results_{term.replace(' ', '_')}")
 
         return False
 
@@ -305,45 +333,114 @@ class UberEatsScraper(AbstractScraper):
         self._search_promo = ""
 
         try:
-            # Uber Eats search results: "McDonald's Antara\n4.5\n(15,000+)\n•\n18 min"
-            # Also: "Costo de envío de $0 con Uber One."
-            # Also: "Gasta $300, ahorra $120"
+            # Uber Eats search results card structure (varies):
+            #   "McDonald's Antara\n4.5\n(15,000+)\n•\n18 min\n$0 Delivery Fee"
+            #   "Costo de envío de $29\n15-25 min"
+            #   "Envío gratis con Uber One"
+            #   "Gasta $300, ahorra $120"
 
-            # Get the section text near the first result
+            # Find the card — try multiple ancestor levels to get full card text
             result_heading = page.locator(f'h3:has-text("{term}")').first
             if not result_heading.is_visible(timeout=3000):
+                # Fallback: first store link
+                result_heading = page.locator('a[href*="/store/"], a[href*="/tienda/"]').first
+                if not result_heading.is_visible(timeout=2000):
+                    return
+
+            card_text = ""
+            for level in range(3, 8):
+                try:
+                    ancestor = result_heading.locator(f"xpath=ancestor::*[{level}]")
+                    card_text = ancestor.inner_text()
+                    # Stop when we have enough context (ETA + fee indicators)
+                    if "min" in card_text and ("$" in card_text or "gratis" in card_text.lower()):
+                        break
+                except Exception:
+                    continue
+
+            if not card_text:
                 return
 
-            # Get parent card text
-            card = result_heading.locator("xpath=ancestor::*[5]")
-            card_text = card.inner_text()
-
-            # ETA: "XX min"
-            eta_match = re.search(r"(\d+)\s*min", card_text)
+            # ETA: "XX min" or "XX-YY min"
+            eta_match = re.search(r"(\d+)\s*(?:[-–]\s*\d+\s*)?min", card_text)
             if eta_match:
-                self._search_eta = int(eta_match.group(1))
+                self._search_eta = parse_time_minutes(eta_match.group(0))
 
-            # Fee from global banner: "Costo de envío de $X" or "Envío gratis"
-            fee_banner = page.locator('text=/Costo de env[íi]o/i').first
-            if fee_banner.is_visible(timeout=2000):
-                fee_text = fee_banner.inner_text()
-                if re.search(r"gratis|free|\$\s*0", fee_text, re.IGNORECASE):
+            # --- Fee extraction (multi-strategy) ---
+            # 1. Explicit fee labels in card text
+            for line in card_text.split("\n"):
+                line_lower = line.strip().lower()
+                # "Envío gratis" / "Entrega gratis" / "$0 Delivery Fee"
+                if re.search(r"env[íi]o\s*gratis|entrega\s*gratis|delivery\s*fee.*\$\s*0|\$\s*0.*delivery", line_lower):
                     self._search_fee = 0.0
-                else:
-                    fee_match = re.search(r"\$\s*([\d,.]+)", fee_text)
-                    if fee_match:
-                        self._search_fee = parse_price(f"${fee_match.group(1)}")
+                    break
+                # "Costo de envío de $29" / "Envío de $15" / "Tarifa de entrega: $19"
+                fee_label = re.search(r"(?:costo\s*de\s*env[íi]o|env[íi]o|tarifa\s*de\s*entrega|delivery\s*fee)\s*(?:de\s*)?\$\s*([\d,.]+)", line_lower)
+                if fee_label:
+                    self._search_fee = parse_price(f"${fee_label.group(1)}")
+                    break
+                # "$29 delivery" / "$0 envío"
+                fee_suffix = re.search(r"\$\s*([\d,.]+)\s*(?:delivery|env[íi]o|entrega)", line_lower)
+                if fee_suffix:
+                    self._search_fee = parse_price(f"${fee_suffix.group(1)}")
+                    break
 
-            # Promos
-            promo_els = page.locator('text=/ahorro|descuento|Oferta/i').all()
+            # 2. Look for fee elements elsewhere on the page if not found in card
+            if self._search_fee is None:
+                for sel in [
+                    r'text=/[Cc]osto de env[íi]o/',
+                    r'text=/[Tt]arifa de entrega/',
+                    r'text=/[Dd]elivery [Ff]ee/',
+                    r'text=/[Ee]nv[íi]o gratis/',
+                    r'text=/[Ee]ntrega gratis/',
+                ]:
+                    el = page.locator(sel).first
+                    try:
+                        if el.is_visible(timeout=1500):
+                            fee_text = el.inner_text()
+                            if re.search(r"gratis|free|\$\s*0\b", fee_text, re.IGNORECASE):
+                                self._search_fee = 0.0
+                            else:
+                                fee_val = re.search(r"\$\s*([\d,.]+)", fee_text)
+                                if fee_val:
+                                    self._search_fee = parse_price(f"${fee_val.group(1)}")
+                            if self._search_fee is not None:
+                                break
+                    except Exception:
+                        continue
+
+            # --- Promos extraction ---
             promos = []
-            for el in promo_els[:2]:
+            promo_patterns = [
+                r"ahorra?\s*\$?\s*[\d,.]+",
+                r"gasta\s*\$\s*[\d,.]+.*ahorra",
+                r"\d+%\s*(?:de\s*)?desc",
+                r"(?:oferta|promo)",
+                r"2\s*x\s*1",
+                r"env[íi]o\s*gratis",
+                r"entrega\s*gratis",
+                r"uber\s*one",
+            ]
+            for line in card_text.split("\n"):
+                line_s = line.strip()
+                if not line_s or len(line_s) > 100:
+                    continue
+                for pat in promo_patterns:
+                    if re.search(pat, line_s, re.IGNORECASE):
+                        if line_s not in promos:
+                            promos.append(line_s)
+                        break
+            # Also check page-level promo banners
+            for sel in [r'text=/ahorra|descuento|[Oo]ferta|2\s*x\s*1|promo/i']:
                 try:
-                    if el.is_visible(timeout=1000):
-                        promos.append(el.inner_text().strip()[:80])
-                except (PlaywrightTimeout, Exception):
+                    for el in page.locator(sel).all()[:3]:
+                        if el.is_visible(timeout=1000):
+                            txt = el.inner_text().strip()[:80]
+                            if txt and txt not in promos:
+                                promos.append(txt)
+                except Exception:
                     pass
-            self._search_promo = "; ".join(promos) if promos else ""
+            self._search_promo = "; ".join(promos[:3]) if promos else ""
 
             logger.info("UberEats search: fee=%s eta=%s promo='%s'",
                         self._search_fee, self._search_eta, self._search_promo)
@@ -428,29 +525,42 @@ class UberEatsScraper(AbstractScraper):
     def _extract_fee_from_restaurant(self) -> float | None:
         page = self._page
         try:
-            # "Envío gratis" / "Entrega gratis" wins immediately
-            gratis = page.locator(r'text=/[Ee]nv[íi]o\s*gratis|[Ee]ntrega\s*gratis/').first
+            # "Envío gratis" / "Entrega gratis" / "$0 Delivery Fee"
+            gratis = page.locator(r'text=/[Ee]nv[íi]o\s*gratis|[Ee]ntrega\s*gratis|\$\s*0\s*[Dd]elivery/').first
             if gratis.is_visible(timeout=1500):
                 return 0.0
 
-            for sel in ['text=/Tarifa de entrega/i', 'text=/Costo de env[íi]o/i', 'text=/env[íi]o/i']:
+            for sel in [
+                'text=/Tarifa de entrega/i',
+                'text=/Costo de env[íi]o/i',
+                'text=/Delivery Fee/i',
+                'text=/env[íi]o/i',
+            ]:
                 el = page.locator(sel).first
                 if not el.is_visible(timeout=1500):
                     continue
                 text = el.inner_text()
                 if re.search(r"gratis|free|\$\s*0\b", text, re.IGNORECASE):
                     return 0.0
-                price = parse_price(text)
-                if price is not None:
-                    return price
-                # Check parent element which may include the price value
-                try:
-                    parent_text = el.locator("xpath=..").inner_text()
-                    price = parse_price(parent_text)
-                    if price is not None:
-                        return price
-                except Exception:
-                    pass
+                fee_match = re.search(r"\$\s*([\d,.]+)", text)
+                if fee_match:
+                    val = parse_price(f"${fee_match.group(1)}")
+                    if val is not None:
+                        return val
+                # Check parent and sibling elements for the price value
+                for xpath in ["xpath=..", "xpath=following-sibling::*[1]"]:
+                    try:
+                        related = el.locator(xpath)
+                        related_text = related.inner_text()
+                        if re.search(r"gratis|free|\$\s*0\b", related_text, re.IGNORECASE):
+                            return 0.0
+                        fee_match = re.search(r"\$\s*([\d,.]+)", related_text)
+                        if fee_match:
+                            val = parse_price(f"${fee_match.group(1)}")
+                            if val is not None and val < 100:
+                                return val
+                    except Exception:
+                        continue
         except (PlaywrightTimeout, Exception):
             pass
         return None

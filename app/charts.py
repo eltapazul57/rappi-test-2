@@ -202,3 +202,133 @@ def chart_fee_comparison(
     )
 
     return fig
+
+
+def chart_price_breakdown(
+    df: pd.DataFrame,
+    product_key: str = "big_mac",
+    title: str | None = None,
+) -> go.Figure:
+    """Stacked bar: desglose precio producto + delivery fee por zona y plataforma."""
+    prepared = _prepare_df(df)
+    prepared = prepared[prepared["product"] == product_key]
+
+    if prepared.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos para este producto", showarrow=False)
+        return fig
+
+    zone_order_labels = [ZONE_LABELS.get(z, z) for z in ZONE_ORDER if z in prepared["zone"].values]
+    prepared["zone_label"] = pd.Categorical(
+        prepared["zone_label"], categories=zone_order_labels, ordered=True
+    )
+    prepared = prepared.sort_values("zone_label")
+
+    # Build one trace per platform for price, one for fee
+    platforms = [p for p in ["rappi", "uber_eats", "didi_food"] if p in prepared["platform"].values]
+
+    fig = go.Figure()
+    for plat in platforms:
+        plat_data = prepared[prepared["platform"] == plat]
+        label = PLATFORM_LABELS.get(plat, plat)
+        color = PLATFORM_COLORS.get(plat, "#888")
+
+        # Price bar (solid)
+        fig.add_trace(go.Bar(
+            name=f"{label} — Precio",
+            x=plat_data["zone_label"],
+            y=plat_data["price"].fillna(0),
+            marker_color=color,
+            text=plat_data["price"].apply(lambda x: f"${x:.0f}" if pd.notna(x) else ""),
+            textposition="inside",
+            legendgroup=plat,
+        ))
+        # Fee bar (lighter, stacked)
+        fig.add_trace(go.Bar(
+            name=f"{label} — Fee",
+            x=plat_data["zone_label"],
+            y=plat_data["delivery_fee"].fillna(0),
+            marker_color=color,
+            marker_opacity=0.45,
+            text=plat_data["delivery_fee"].apply(
+                lambda x: f"+${x:.0f}" if pd.notna(x) and x > 0 else ("Gratis" if pd.notna(x) and x == 0 else "")
+            ),
+            textposition="inside",
+            legendgroup=plat,
+        ))
+
+    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
+    fig.update_layout(
+        barmode="stack",
+        title=title or f"Desglose de Costo — {product_name}",
+        xaxis_title="",
+        yaxis_title="MXN",
+        legend_title="Componente",
+        height=450,
+    )
+
+    return fig
+
+
+def chart_data_quality(df: pd.DataFrame, title: str | None = None) -> go.Figure:
+    """Stacked bar showing data completeness per column across platforms."""
+    if df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos", showarrow=False)
+        return fig
+
+    success_df = df[df["scrape_status"] == "success"].copy()
+    if success_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Sin datos exitosos", showarrow=False)
+        return fig
+
+    columns_to_check = ["price", "delivery_fee", "estimated_time_min", "promotions"]
+    platforms = [p for p in ["rappi", "uber_eats", "didi_food"] if p in success_df["platform"].values]
+
+    data_rows = []
+    for plat in platforms:
+        plat_df = success_df[success_df["platform"] == plat]
+        total = len(plat_df)
+        for col in columns_to_check:
+            if col == "promotions":
+                filled = plat_df[col].notna() & (plat_df[col].astype(str).str.strip() != "")
+            else:
+                filled = plat_df[col].notna()
+            pct = filled.sum() / total * 100 if total > 0 else 0
+            col_label = {
+                "price": "Precio",
+                "delivery_fee": "Delivery Fee",
+                "estimated_time_min": "ETA",
+                "promotions": "Promociones",
+            }.get(col, col)
+            data_rows.append({
+                "platform": PLATFORM_LABELS.get(plat, plat),
+                "column": col_label,
+                "pct_filled": pct,
+                "color": PLATFORM_COLORS.get(plat, "#888"),
+            })
+
+    plot_df = pd.DataFrame(data_rows)
+
+    color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in success_df["platform"].values}
+
+    fig = px.bar(
+        plot_df,
+        x="column",
+        y="pct_filled",
+        color="platform",
+        barmode="group",
+        color_discrete_map=color_map,
+        text=plot_df["pct_filled"].apply(lambda x: f"{x:.0f}%"),
+        labels={"column": "Métrica", "pct_filled": "% Completitud", "platform": "Plataforma"},
+        title=title or "Completitud de Datos por Métrica",
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(
+        yaxis_range=[0, 110],
+        height=350,
+        xaxis_title="",
+        yaxis_title="% de filas con dato",
+    )
+    return fig
