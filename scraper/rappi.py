@@ -150,27 +150,27 @@ class RappiScraper(AbstractScraper):
         logger.info("RappiScraper: contexto reiniciado")
 
     def _wait_for_page_ready(self) -> None:
+        import time
         page = self._page
         try:
             page.wait_for_load_state("domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
-        except PlaywrightTimeout:
+        except Exception:
             pass
-        # Cloudflare check
+        # Cloudflare check — use time.sleep to avoid calling page methods while context may be mid-navigation
         for _ in range(6):
             try:
                 title = page.title().lower()
             except Exception:
-                # page.title() can fail if a navigation is in progress
-                page.wait_for_timeout(1000)
+                time.sleep(1.5)
                 continue
             if "just a moment" in title or "checking" in title:
                 logger.info("Cloudflare challenge, esperando...")
-                page.wait_for_timeout(3000)
+                time.sleep(3)
             else:
                 break
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
-        except PlaywrightTimeout:
+        except Exception:
             pass
 
     def _dismiss_popups(self) -> None:
