@@ -205,9 +205,14 @@ class RappiScraper(AbstractScraper):
     def set_delivery_address(self, address: Address) -> bool:
         page = self._page
         search_text = f"{address.street}, {address.neighborhood}"
-        # Keyword from address to match in suggestions
-        address_keyword = address.street.split()[0]  # e.g. "Presidente" from "Presidente Masaryk 360"
-        logger.info("Rappi: seteando dirección zone=%s", address.zone)
+        # Pick the most distinctive word from the street to match suggestions.
+        # Skip leading "Av." / "Avenida" / "Pasaje" etc. which are too generic.
+        _SKIP = {"av.", "avenida", "pasaje", "blvd.", "boulevard", "calle"}
+        address_keyword = next(
+            (w for w in address.street.split() if w.lower().rstrip(".") not in _SKIP and len(w) > 3),
+            address.street.split()[0],
+        )
+        logger.info("Rappi: seteando dirección zone=%s keyword='%s'", address.zone, address_keyword)
 
         page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
         self._wait_for_page_ready()
@@ -272,13 +277,16 @@ class RappiScraper(AbstractScraper):
         logger.info("Rappi: buscando producto %s", product.key)
 
         for term in terms:
+            # Dismiss overlays BEFORE locating the search input, so it's not covered
+            self._dismiss_popups()
+
             search_input = page.locator('input[type="search"]').first
-            if not search_input.is_visible(timeout=5000):
-                logger.warning("Rappi: barra de búsqueda no visible")
+            try:
+                search_input.wait_for(state="visible", timeout=8000)
+            except Exception:
+                logger.warning("Rappi: barra de búsqueda no visible para '%s'", term)
                 continue
 
-            # Dismiss any overlay that may cover the search bar, then scroll to it
-            self._dismiss_popups()
             search_input.scroll_into_view_if_needed(timeout=3000)
             search_input.click(timeout=5000)
             page.wait_for_timeout(500)
@@ -334,10 +342,13 @@ class RappiScraper(AbstractScraper):
             if eta_match:
                 self._store_eta = int(eta_match.group(1))
 
-            # Fee: "$ 0.00" or "$ 29.00"
-            fee_match = re.search(r"\$\s*([\d,.]+)", card_text)
-            if fee_match:
-                self._store_fee = parse_price(f"${fee_match.group(1)}")
+            # Fee: "Envío Gratis", "$ 0.00", "$ 29.00"
+            if re.search(r"env[íi]o\s*gratis", card_text, re.IGNORECASE):
+                self._store_fee = 0.0
+            else:
+                fee_match = re.search(r"\$\s*([\d,.]+)", card_text)
+                if fee_match:
+                    self._store_fee = parse_price(f"${fee_match.group(1)}")
 
             # Promo: "Envío Gratis" or similar
             promo_patterns = ["Envío [Gg]ratis", "descuento", "Aplican TyC", "primer pedido"]
@@ -441,13 +452,30 @@ class RappiScraper(AbstractScraper):
         """Extrae delivery fee de la página del restaurante."""
         page = self._page
         try:
-            for sel in ['text=/Envío/i', 'text=/envío/i']:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=2000):
+            # Try "Envío Gratis" text nodes first
+            gratis = page.locator('text=/[Ee]nv[íi]o [Gg]ratis/').first
+            if gratis.is_visible(timeout=2000):
+                return 0.0
+
+            # Then look for "Envío" followed by a price on the same element or nearby
+            envio_els = page.locator('text=/[Ee]nv[íi]o/').all()
+            for el in envio_els[:5]:
+                try:
+                    if not el.is_visible(timeout=500):
+                        continue
                     text = el.inner_text()
                     if "gratis" in text.lower():
                         return 0.0
-                    return parse_price(text)
+                    price = parse_price(text)
+                    if price is not None:
+                        return price
+                    # Try the parent element which may include the price
+                    parent_text = el.locator("xpath=..").inner_text()
+                    price = parse_price(parent_text)
+                    if price is not None:
+                        return price
+                except Exception:
+                    continue
         except (PlaywrightTimeout, Exception):
             pass
         return None
