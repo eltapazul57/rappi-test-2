@@ -126,6 +126,16 @@ class RappiScraper(AbstractScraper):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _screenshot(self, label: str) -> None:
+        """Guarda un screenshot en logs/ para diagnóstico."""
+        try:
+            from scraper.config import ROOT_DIR
+            path = ROOT_DIR / "logs" / f"rappi_{label}.png"
+            self._page.screenshot(path=str(path), full_page=True)
+            logger.info("Rappi: screenshot guardado en %s", path)
+        except Exception as exc:
+            logger.debug("Rappi: no se pudo guardar screenshot: %s", exc)
+
     def _reset_context(self) -> None:
         """Cierra el contexto/página actual y abre uno nuevo con el mismo browser."""
         for resource in (getattr(self, "_page", None), getattr(self, "_context", None)):
@@ -175,12 +185,16 @@ class RappiScraper(AbstractScraper):
 
     def _dismiss_popups(self) -> None:
         page = self._page
-        for sel in ["button:has-text('Ok, entendido')", "button:has-text('Aceptar')", "button:has-text('Cerrar')"]:
+        for sel in [
+            "button:has-text('Ok, entendido')",
+            "button:has-text('Aceptar')",
+            "button:has-text('Cerrar')",
+        ]:
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=1500):
+                if loc.is_visible(timeout=1000):
                     loc.click(timeout=2000)
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(400)
             except (PlaywrightTimeout, Exception):
                 pass
 
@@ -204,6 +218,7 @@ class RappiScraper(AbstractScraper):
         addr_input = page.locator('input[placeholder*="Dónde quieres"]')
         if not addr_input.is_visible(timeout=5000):
             # Context may be stale from a previous failed navigation; recreate and retry once
+            self._screenshot(f"no_addr_input_{address.zone}")
             logger.warning("Rappi: input no visible, reiniciando contexto para zone=%s", address.zone)
             self._reset_context()
             page = self._page
@@ -224,13 +239,31 @@ class RappiScraper(AbstractScraper):
         # Select address suggestion — Rappi uses plain <li> elements
         suggestion = page.locator(f'li:has-text("{address_keyword}")').first
         if not suggestion.is_visible(timeout=5000):
-            logger.warning("Rappi: sugerencia de dirección no encontrada para zone=%s", address.zone)
+            # Log what suggestions ARE visible to help debug the selector
+            try:
+                all_li = page.locator("li").all()
+                visible_texts = [li.inner_text() for li in all_li[:10] if li.is_visible(timeout=300)]
+                logger.warning("Rappi: sugerencia no encontrada para '%s'. LIs visibles: %s", address_keyword, visible_texts)
+            except Exception:
+                pass
+            self._screenshot(f"no_suggestion_{address.zone}")
             return False
 
         suggestion.click()
         random_delay(min_seconds=2.0, max_seconds=3.0)
         self._wait_for_page_ready()
-        logger.info("Rappi: dirección seteada para zone=%s", address.zone)
+        self._dismiss_popups()
+
+        # Rappi a veces redirige a /promociones u otras páginas tras setear la dirección.
+        # Volver a la home para asegurar que el search bar esté activo.
+        current_url = page.url
+        if "/promocion" in current_url or current_url.rstrip("/") != self.BASE_URL.rstrip("/"):
+            logger.info("Rappi: redirigió a %s, volviendo a home", current_url)
+            page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+            self._wait_for_page_ready()
+            self._dismiss_popups()
+
+        logger.info("Rappi: dirección seteada para zone=%s (url=%s)", address.zone, page.url)
         return True
 
     def search_product(self, product: Product) -> bool:
@@ -244,9 +277,21 @@ class RappiScraper(AbstractScraper):
                 logger.warning("Rappi: barra de búsqueda no visible")
                 continue
 
-            search_input.click()
+            # Dismiss any overlay that may cover the search bar, then scroll to it
+            self._dismiss_popups()
+            search_input.scroll_into_view_if_needed(timeout=3000)
+            search_input.click(timeout=5000)
             page.wait_for_timeout(500)
-            search_input.fill("")
+            try:
+                search_input.fill("", timeout=10000)
+            except Exception:
+                # Last resort: force=True bypasses visibility check
+                try:
+                    search_input.fill("", force=True, timeout=5000)
+                except Exception as exc:
+                    logger.warning("Rappi: fill falló incluso con force=True: %s", exc)
+                    self._screenshot(f"fill_failed_{product.key}")
+                    continue
             page.wait_for_timeout(300)
             search_input.type(term, delay=60)
             random_delay(min_seconds=1.5, max_seconds=2.5)
