@@ -126,6 +126,29 @@ class RappiScraper(AbstractScraper):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _reset_context(self) -> None:
+        """Cierra el contexto/página actual y abre uno nuevo con el mismo browser."""
+        for resource in (getattr(self, "_page", None), getattr(self, "_context", None)):
+            try:
+                if resource:
+                    resource.close()
+            except Exception:
+                pass
+        self._context: BrowserContext = self._browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=get_random_user_agent(),
+            locale="es-MX",
+            timezone_id="America/Mexico_City",
+            geolocation={"latitude": 19.4326, "longitude": -99.1332},
+            permissions=["geolocation"],
+        )
+        self._context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        self._page: Page = self._context.new_page()
+        self._page.set_default_timeout(REQUEST_TIMEOUT_MS)
+        logger.info("RappiScraper: contexto reiniciado")
+
     def _wait_for_page_ready(self) -> None:
         page = self._page
         try:
@@ -134,7 +157,12 @@ class RappiScraper(AbstractScraper):
             pass
         # Cloudflare check
         for _ in range(6):
-            title = page.title().lower()
+            try:
+                title = page.title().lower()
+            except Exception:
+                # page.title() can fail if a navigation is in progress
+                page.wait_for_timeout(1000)
+                continue
             if "just a moment" in title or "checking" in title:
                 logger.info("Cloudflare challenge, esperando...")
                 page.wait_for_timeout(3000)
@@ -175,8 +203,18 @@ class RappiScraper(AbstractScraper):
         # Address input — validated selector
         addr_input = page.locator('input[placeholder*="Dónde quieres"]')
         if not addr_input.is_visible(timeout=5000):
-            logger.warning("Rappi: input de dirección no visible para zone=%s", address.zone)
-            return False
+            # Context may be stale from a previous failed navigation; recreate and retry once
+            logger.warning("Rappi: input no visible, reiniciando contexto para zone=%s", address.zone)
+            self._reset_context()
+            page = self._page
+            addr_input = page.locator('input[placeholder*="Dónde quieres"]')
+            page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+            self._wait_for_page_ready()
+            self._dismiss_popups()
+            random_delay()
+            if not addr_input.is_visible(timeout=5000):
+                logger.warning("Rappi: input de dirección no visible para zone=%s", address.zone)
+                return False
 
         addr_input.click()
         page.wait_for_timeout(500)
