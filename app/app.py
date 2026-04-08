@@ -25,6 +25,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
 from scraper.config import OUTPUT_CSV
+from app.ai_insights import generate_insights_with_ai, is_ai_ready
 from app.charts import (
     chart_total_cost_by_zone,
     chart_eta_heatmap,
@@ -39,7 +40,6 @@ from app.charts import (
 
 st.set_page_config(
     page_title="Competitive Intelligence — Rappi vs Uber Eats vs DiDi Food",
-    page_icon="🛵",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -151,10 +151,20 @@ def render_tab_data(df: pd.DataFrame) -> None:
 
     # Botón de scraping real
     st.subheader("Ejecutar Scraping")
-    run_live = st.button("🚀 Ejecutar scraping real", type="primary")
 
-    if run_live:
+    col_btn1, col_btn2 = st.columns([1, 3])
+    with col_btn1:
+        run_both = st.button("Ejecutar scraping (Rappi + Uber Eats)", type="primary")
+    with col_btn2:
+        run_rappi = st.button("Solo Rappi")
+        run_uber = st.button("Solo Uber Eats")
+
+    if run_both:
         _run_scraping_subprocess()
+    elif run_rappi:
+        _run_scraping_subprocess(platforms=["rappi"])
+    elif run_uber:
+        _run_scraping_subprocess(platforms=["uber_eats"])
 
     st.divider()
 
@@ -186,38 +196,45 @@ def render_tab_data(df: pd.DataFrame) -> None:
         st.info("Sin datos. Ejecuta el scraper para generar competitive_data.csv.")
 
 
-def _run_scraping_subprocess() -> None:
-    """Ejecuta el runner como subprocess y muestra output en tiempo real."""
-    with st.status("Ejecutando scraping...", expanded=True) as status:
-        st.write("Lanzando scrapers de Rappi, Uber Eats y DiDi Food...")
-        st.write("Esto puede tomar varios minutos por los delays de rate limiting.")
+def _run_scraping_subprocess(platforms: list[str] | None = None) -> None:
+    """Ejecuta el runner como subprocess con streaming de logs en tiempo real."""
+    cmd = [sys.executable, "-m", "scraper.runner"]
+    if platforms:
+        cmd += ["--platforms"] + platforms
 
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "scraper.runner"],
-                cwd=str(ROOT_DIR),
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minutos máximo
-            )
+    platform_label = ", ".join(platforms) if platforms else "Rappi + Uber Eats"
+    st.info(f"Iniciando scraping de: {platform_label}. No cierres esta ventana.")
 
-            if result.stdout:
-                st.code(result.stdout[-3000:], language="text")  # últimas 3000 chars
+    log_area = st.empty()
+    log_lines: list[str] = []
+    status_placeholder = st.empty()
 
-            if result.returncode == 0:
-                status.update(label="Scraping completado", state="complete")
-            else:
-                st.error(f"El scraper terminó con código {result.returncode}")
-                if result.stderr:
-                    st.code(result.stderr[-2000:], language="text")
-                status.update(label="Scraping falló", state="error")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # mezcla stderr + stdout en un solo stream
+            text=True,
+            bufsize=1,
+        )
 
-        except subprocess.TimeoutExpired:
-            st.error("Timeout: el scraping excedió los 10 minutos.")
-            status.update(label="Timeout", state="error")
-        except Exception as exc:
-            st.error(f"Error ejecutando scraper: {exc}")
-            status.update(label="Error", state="error")
+        for line in proc.stdout:  # type: ignore[union-attr]
+            line = line.rstrip()
+            if line:
+                log_lines.append(line)
+                # Mostramos las últimas 60 líneas para no sobrecargar la UI
+                log_area.code("\n".join(log_lines[-60:]), language="text")
+
+        proc.wait()
+
+        if proc.returncode == 0:
+            status_placeholder.success("Scraping completado correctamente. El CSV ha sido actualizado.")
+        else:
+            status_placeholder.error(f"El scraper terminó con código de error {proc.returncode}. Revisa los logs de arriba.")
+
+    except Exception as exc:
+        status_placeholder.error(f"Error iniciando el scraper: {exc}")
 
     st.cache_data.clear()
     st.rerun()
@@ -282,13 +299,25 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
 
     st.divider()
 
-    # ── Top 5 Insights ────────────────────────────────────────────────
-    st.header("Top 5 Insights Accionables")
-    st.markdown(
-        "_Cada insight sigue el formato **Finding → Impacto → Recomendación** "
-        "para ser directamente accionable por equipos de producto y pricing._"
-    )
-    _render_dynamic_insights(success_df, selected_product)
+    # ── Top 5 Insights (Inteligencia Artificial) ──────────────────────
+    st.header("Top 5 Insights (Inteligencia Artificial)")
+    st.markdown("Genera un análisis estratégico profundo y dinámico alimentando un modelo LLM con los datos reales capturados.")
+
+    if is_ai_ready():
+        if st.button("Generar Insights Estratégicos con OpenAI", type="primary"):
+            with st.spinner("Analizando precios, tiempos de entrega y promociones cruzadas..."):
+                ai_markdown = generate_insights_with_ai(success_df)
+                st.markdown(ai_markdown)
+    else:
+        st.warning("OpenAI no está configurado. Para activar la Inteligencia Artificial, instala `requirements.txt` y renombra tu `.env.example` a `.env` incluyendo un `OPENAI_API_KEY` válido.")
+
+    st.divider()
+
+    # ── Insights Básicos (Locales) ────────────────────────────────────
+    st.header("Insights Básicos (Algorítmicos)")
+    st.markdown("_Insights heurísticos calculados estáticamente (Fallback)._")
+    with st.expander("Ver Análisis Estático", expanded=False):
+        _render_dynamic_insights(success_df, selected_product)
 
     st.divider()
 
@@ -794,13 +823,13 @@ socioeconómica: Polanco (premium), Condesa/Roma (alta competencia), Centro Hist
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    st.title("🛵 Competitive Intelligence Dashboard")
+    st.title("Competitive Intelligence Dashboard")
     st.caption("Rappi vs Uber Eats vs DiDi Food — CDMX, México")
 
     df_raw = load_data()
     df_filtered, selected_product = render_sidebar(df_raw)
 
-    tab1, tab2 = st.tabs(["📊 Datos & Scraping", "💡 Insights Competitivos"])
+    tab1, tab2 = st.tabs(["Datos & Scraping", "Insights Competitivos"])
 
     with tab1:
         render_tab_data(df_filtered)

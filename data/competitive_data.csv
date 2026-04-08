@@ -1,0 +1,76 @@
+timestamp,platform,address_id,zone,product,price,delivery_fee,estimated_time_min,promotions,scrape_status
+2026-04-08T17:30:21.769264+00:00,rappi,1,polanco,big_mac,,,,,not_available
+2026-04-08T17:30:49.468840+00:00,rappi,1,polanco,coca_cola_600ml,,,,,not_available
+2026-04-08T17:31:21.006040+00:00,rappi,1,polanco,whopper,144.0,0.0,30.0,Promociones BK; Envío gratis en tu pedido; Hasta 63% OFF imperdible,success
+2026-04-08T17:31:57.213551+00:00,rappi,1,polanco,pizza_pepperoni,169.0,0.0,30.0,Envío gratis en tu pedido,success
+2026-04-08T17:32:32.731405+00:00,rappi,1,polanco,coca_cola_600ml_711,26.24,0.0,13.0,Envío gratis,success
+2026-04-08T17:33:04.853570+00:00,rappi,2,condesa_roma,big_mac,145.0,0.0,13.0,Envío gratis en tu pedido; Hasta 64% OFF imperdible,success
+2026-04-08T17:33:36.374214+00:00,rappi,2,condesa_roma,coca_cola_600ml,,,,,not_available
+2026-04-08T17:34:09.685712+00:00,rappi,2,condesa_roma,whopper,144.0,0.0,13.0,Promociones BK; Envío gratis en tu pedido; Hasta 63% OFF imperdible,success
+2026-04-08T17:34:47.061617+00:00,rappi,2,condesa_roma,pizza_pepperoni,169.0,0.0,13.0,Envío gratis en tu pedido,success
+2026-04-08T17:35:24.166687+00:00,rappi,2,condesa_roma,coca_cola_600ml_711,27.44,0.0,22.0,Envío gratis; Catálogo ProductosPromociones y OfertasRestaurantesSúper c,success
+2026-04-08T17:35:55.616170+00:00,rappi,3,centro_historico,big_mac,149.0,0.0,20.0,Envío gratis en tu pedido; Hasta 64% OFF imperdible,success
+2026-04-08T17:36:22.048590+00:00,rappi,3,centro_historico,coca_cola_600ml,,,,,not_available
+2026-04-08T17:36:54.030839+00:00,rappi,3,centro_historico,whopper,144.0,0.0,13.0,Promociones BK; Envío gratis en tu pedido; Hasta 63% OFF imperdible,success
+2026-04-08T17:37:24.053553+00:00,rappi,3,centro_historico,pizza_pepperoni,169.0,0.0,20.0,Envío gratis en tu pedido,success
+2026-04-08T17:37:57.207157+00:00,rappi,3,centro_historico,coca_cola_600ml_711,26.24,0.0,13.0,Envío gratis; Promociones; Ofertas,success
+2026-04-08T17:38:28.675523+00:00,rappi,4,coyoacan,big_mac,,,,,not_available
+2026-04-08T17:39:08.652932+00:00,rappi,4,coyoacan,coca_cola_600ml,70.0,0.0,32.0,Envío gratis; Catálogo ProductosPromociones y OfertasRestaurantesSúper cer,success
+2026-04-08T17:39:38.925010+00:00,rappi,4,coyoacan,whopper,144.0,0.0,25.0,Promociones BK; Envío gratis en tu pedido; Hasta 63% OFF imperdible,success
+2026-04-08T17:40:15.409129+00:00,rappi,4,coyoacan,pizza_pepperoni,169.0,0.0,15.0,Envío gratis en tu pedido,success
+2026-04-08T17:40:48.818708+00:00,rappi,4,coyoacan,coca_cola_600ml_711,27.44,0.0,13.0,Envío gratis,success
+2026-04-08T17:41:16.199926+00:00,rappi,5,iztapalapa,big_mac,,,,,not_available
+2026-04-08T17:41:49.071918+00:00,rappi,5,iztapalapa,coca_cola_600ml,32.5,0.0,32.0,Envío gratis; Catálogo ProductosPromociones y OfertasRestaurantesSúper cerca de miFarmacia cerca de miExpress cerca de miTien,success
+2026-04-08T17:42:22.641533+00:00,rappi,5,iztapalapa,whopper,144.0,0.0,25.0,Promociones BK; Envío gratis en tu pedido; Hasta 63% OFF imperdible,success
+2026-04-08T17:42:57.524932+00:00,rappi,5,iztapalapa,pizza_pepperoni,169.0,0.0,30.0,Envío gratis en tu pedido,success
+2026-04-08T17:43:45.622539+00:00,rappi,5,iztapalapa,coca_cola_600ml_711,,,,,not_available
+2026-04-08T17:44:32.596099+00:00,uber_eats,1,polanco,big_mac,99.0,0.0,16.0,"Artículos en oferta; Gasta $300, ahorra $120; Gasta $500, ahorra $100",success
+2026-04-08T17:45:17.323209+00:00,uber_eats,1,polanco,coca_cola_600ml,29.0,0.0,12.0,"2 Ofertas disponibles; Artículos en oferta; Gasta $500, ahorra $100",success
+2026-04-08T17:45:54.686290+00:00,uber_eats,1,polanco,whopper,179.0,0.0,13.0,4 Ofertas disponibles; 2 Ofertas disponibles; Oferta superior • 2X1,success
+2026-04-08T17:46:32.844709+00:00,uber_eats,1,polanco,pizza_pepperoni,129.0,0.0,23.0,"2 Ofertas disponibles; Gasta $300, ahorra $120; Oferta superior • Ahorros exclusivos",success
+2026-04-08T17:47:09.300615+00:00,uber_eats,1,polanco,coca_cola_600ml_711,24.5,0.0,10.0,"2 Ofertas disponibles; 4 Ofertas disponibles; Gasta $300, ahorra $120",success
+2026-04-08T17:47:46.172471+00:00,uber_eats,2,condesa_roma,big_mac,99.0,0.0,10.0,"Gasta $300, ahorra $120; Gasta $150, ahorra $30; 2 Ofertas disponibles",success
+2026-04-08T17:48:20.975195+00:00,uber_eats,2,condesa_roma,coca_cola_600ml,149.0,0.0,14.0,Artículos en oferta; 2 Ofertas disponibles; 2X1,success
+2026-04-08T17:49:00.406909+00:00,uber_eats,2,condesa_roma,whopper,179.0,0.0,10.0,"2 Ofertas disponibles; Gasta $300, ahorra $100; Gasta $300, ahorra $120",success
+2026-04-08T17:49:36.662021+00:00,uber_eats,2,condesa_roma,pizza_pepperoni,129.0,0.0,11.0,2 Ofertas disponibles; Oferta superior • Ahorros exclusivos; 2X1,success
+2026-04-08T17:50:11.576668+00:00,uber_eats,2,condesa_roma,coca_cola_600ml_711,49.0,0.0,10.0,"2 Ofertas disponibles; Oferta superior • Ahorros exclusivos; Gasta $169, ahorra $79",success
+2026-04-08T17:50:47.776206+00:00,uber_eats,3,centro_historico,big_mac,99.0,0.0,10.0,"Gasta $149, ahorra $50; 2 Ofertas disponibles; Gasta $300, ahorra $120",success
+2026-04-08T17:51:24.458128+00:00,uber_eats,3,centro_historico,coca_cola_600ml,138.0,0.0,29.0,2 Ofertas disponibles; Artículos en oferta; Oferta superior • 2X1,success
+2026-04-08T17:52:01.652430+00:00,uber_eats,3,centro_historico,whopper,179.0,0.0,10.0,"2 Ofertas disponibles; Gasta $300, ahorra $100; Oferta superior • Un 30% de ahorro (gasto mínimo de $250)",success
+2026-04-08T17:52:37.459210+00:00,uber_eats,3,centro_historico,pizza_pepperoni,129.0,0.0,12.0,"Gasta $300, ahorra $100; 2 Ofertas disponibles; Oferta superior • Ahorros exclusivos",success
+2026-04-08T17:53:13.413351+00:00,uber_eats,3,centro_historico,coca_cola_600ml_711,24.0,0.0,10.0,"2 Ofertas disponibles; Artículos en oferta; Gasta $150, ahorra $30",success
+2026-04-08T17:53:49.595618+00:00,uber_eats,4,coyoacan,big_mac,39.0,0.0,10.0,"Oferta superior • Ahorros exclusivos; Gasta $300, ahorra $120; Gasta $200, ahorra $80",success
+2026-04-08T17:54:25.495262+00:00,uber_eats,4,coyoacan,coca_cola_600ml,482.3,0.0,10.0,"Artículos en oferta; 2 Ofertas disponibles; Gasta $300, ahorra $120",success
+2026-04-08T17:55:02.590404+00:00,uber_eats,4,coyoacan,whopper,179.0,0.0,18.0,"2X1; Gasta $300, ahorra $120; 2 Ofertas disponibles",success
+2026-04-08T17:55:40.972499+00:00,uber_eats,4,coyoacan,pizza_pepperoni,129.0,0.0,10.0,2 Ofertas disponibles; Oferta superior • Ahorros exclusivos; 2X1,success
+2026-04-08T17:56:16.828363+00:00,uber_eats,4,coyoacan,coca_cola_600ml_711,25.5,0.0,10.0,"2 Ofertas disponibles; Gasta $300, ahorra $120; Artículos en oferta",success
+2026-04-08T17:56:54.069737+00:00,uber_eats,5,iztapalapa,big_mac,39.0,0.0,14.0,"Gasta $300, ahorra $120; Gasta $200, ahorra $80; 2 Ofertas disponibles",success
+2026-04-08T17:57:32.837667+00:00,uber_eats,5,iztapalapa,coca_cola_600ml,53.85,0.0,25.0,2 Ofertas disponibles; Artículos en oferta; Oferta superior • Ahorros exclusivos,success
+2026-04-08T17:58:09.496279+00:00,uber_eats,5,iztapalapa,whopper,179.0,0.0,14.0,"Gasta $300, ahorra $120; Oferta superior • Un 30% de ahorro (gasto mínimo de $250); 2 Ofertas disponibles",success
+2026-04-08T17:58:46.762728+00:00,uber_eats,5,iztapalapa,pizza_pepperoni,129.0,0.0,12.0,"Gasta $300, ahorra $120; Oferta superior • Ahorros exclusivos; 2X1",success
+2026-04-08T17:59:22.724982+00:00,uber_eats,5,iztapalapa,coca_cola_600ml_711,349.0,0.0,14.0,2X1; 2 Ofertas disponibles; Oferta superior • Un 30% de ahorro (gasto mínimo de $250),success
+2026-04-08T17:59:31.017314+00:00,didi_food,1,polanco,big_mac,,,,,not_available
+2026-04-08T17:59:31.017356+00:00,didi_food,1,polanco,coca_cola_600ml,,,,,not_available
+2026-04-08T17:59:31.017377+00:00,didi_food,1,polanco,whopper,,,,,not_available
+2026-04-08T17:59:31.017395+00:00,didi_food,1,polanco,pizza_pepperoni,,,,,not_available
+2026-04-08T17:59:31.017413+00:00,didi_food,1,polanco,coca_cola_600ml_711,,,,,not_available
+2026-04-08T17:59:31.017431+00:00,didi_food,2,condesa_roma,big_mac,,,,,not_available
+2026-04-08T17:59:31.017447+00:00,didi_food,2,condesa_roma,coca_cola_600ml,,,,,not_available
+2026-04-08T17:59:31.017463+00:00,didi_food,2,condesa_roma,whopper,,,,,not_available
+2026-04-08T17:59:31.017481+00:00,didi_food,2,condesa_roma,pizza_pepperoni,,,,,not_available
+2026-04-08T17:59:31.017498+00:00,didi_food,2,condesa_roma,coca_cola_600ml_711,,,,,not_available
+2026-04-08T17:59:31.017515+00:00,didi_food,3,centro_historico,big_mac,,,,,not_available
+2026-04-08T17:59:31.017531+00:00,didi_food,3,centro_historico,coca_cola_600ml,,,,,not_available
+2026-04-08T17:59:31.017548+00:00,didi_food,3,centro_historico,whopper,,,,,not_available
+2026-04-08T17:59:31.017618+00:00,didi_food,3,centro_historico,pizza_pepperoni,,,,,not_available
+2026-04-08T17:59:31.017666+00:00,didi_food,3,centro_historico,coca_cola_600ml_711,,,,,not_available
+2026-04-08T17:59:31.017692+00:00,didi_food,4,coyoacan,big_mac,,,,,not_available
+2026-04-08T17:59:31.017713+00:00,didi_food,4,coyoacan,coca_cola_600ml,,,,,not_available
+2026-04-08T17:59:31.017732+00:00,didi_food,4,coyoacan,whopper,,,,,not_available
+2026-04-08T17:59:31.017749+00:00,didi_food,4,coyoacan,pizza_pepperoni,,,,,not_available
+2026-04-08T17:59:31.017766+00:00,didi_food,4,coyoacan,coca_cola_600ml_711,,,,,not_available
+2026-04-08T17:59:31.017783+00:00,didi_food,5,iztapalapa,big_mac,,,,,not_available
+2026-04-08T17:59:31.017801+00:00,didi_food,5,iztapalapa,coca_cola_600ml,,,,,not_available
+2026-04-08T17:59:31.017819+00:00,didi_food,5,iztapalapa,whopper,,,,,not_available
+2026-04-08T17:59:31.017838+00:00,didi_food,5,iztapalapa,pizza_pepperoni,,,,,not_available
+2026-04-08T17:59:31.017854+00:00,didi_food,5,iztapalapa,coca_cola_600ml_711,,,,,not_available

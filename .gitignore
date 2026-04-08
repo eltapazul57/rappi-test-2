@@ -5,3 +5,5 @@ __pycache__/
 
 # Images generated during scraping/debug
 *.png
+
+.env
