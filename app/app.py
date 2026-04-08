@@ -27,6 +27,9 @@ sys.path.insert(0, str(ROOT_DIR))
 from scraper.config import OUTPUT_CSV
 from app.ai_insights import generate_insights_with_ai, is_ai_ready
 from app.charts import (
+    PLATFORM_LABELS,
+    PRODUCT_LABELS,
+    ZONE_LABELS,
     chart_total_cost_by_zone,
     chart_eta_heatmap,
     chart_fee_comparison,
@@ -49,16 +52,6 @@ CSV_COLUMNS = [
     "price", "delivery_fee", "estimated_time_min", "promotions", "scrape_status",
 ]
 
-PLATFORM_LABELS = {"rappi": "Rappi", "uber_eats": "Uber Eats", "didi_food": "DiDi Food"}
-PRODUCT_LABELS = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}
-ZONE_LABELS = {
-    "polanco": "Polanco",
-    "condesa_roma": "Condesa/Roma",
-    "centro_historico": "Centro Histórico",
-    "coyoacan": "Coyoacán",
-    "iztapalapa": "Iztapalapa",
-}
-
 
 # ---------------------------------------------------------------------------
 # Carga de datos
@@ -77,7 +70,12 @@ def load_data() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def render_sidebar(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    """Filtros globales. Devuelve (df_filtrado, producto_seleccionado)."""
+    """Filtros globales. Devuelve (df_filtrado, producto_seleccionado).
+
+    El filtro de producto NO se aplica al DataFrame: se pasa como seleccion
+    aparte para que los charts por producto lo usen, mientras que los charts
+    cross-producto (fee comparison, data quality) ven todos los productos.
+    """
     st.sidebar.title("Filtros")
 
     if df.empty:
@@ -93,7 +91,7 @@ def render_sidebar(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
 
     all_products = df["product"].unique().tolist()
     selected_product = st.sidebar.selectbox(
-        "Producto",
+        "Producto (para graficas por producto)",
         options=all_products,
         format_func=lambda x: PRODUCT_LABELS.get(x, x),
     )
@@ -109,8 +107,6 @@ def render_sidebar(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     filtered = df.copy()
     if selected_platforms:
         filtered = filtered[filtered["platform"].isin(selected_platforms)]
-    if selected_product:
-        filtered = filtered[filtered["product"] == selected_product]
     if selected_zones:
         filtered = filtered[filtered["zone"].isin(selected_zones)]
 
@@ -246,7 +242,7 @@ def _run_scraping_subprocess(platforms: list[str] | None = None) -> None:
 
 def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
     st.title("Informe de Competitive Intelligence")
-    st.caption("Análisis comparativo: Rappi vs Uber Eats vs DiDi Food — CDMX, México")
+    st.caption("Analisis comparativo: Rappi vs Uber Eats vs DiDi Food -- CDMX, Mexico")
 
     success_df = df[df["scrape_status"] == "success"].copy() if not df.empty else df
 
@@ -259,22 +255,34 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
 
     st.divider()
 
+    # ── Top 5 Insights ────────────────────────────────────────────────
+    st.header("Top 5 Insights Competitivos")
+    st.markdown(
+        "Insights calculados a partir de los datos recolectados. "
+        "Cada insight incluye hallazgo, impacto al negocio y recomendacion."
+    )
+    _render_dynamic_insights(success_df, selected_product)
+
+    st.divider()
+
     # ── Visualizaciones ───────────────────────────────────────────────
     st.header("Visualizaciones Comparativas")
 
+    product_name = PRODUCT_LABELS.get(selected_product, selected_product)
+
     # Chart 1: Total cost by zone (full width)
-    st.markdown("#### 1. Costo Total al Usuario (Precio + Delivery Fee) por Zona")
+    st.markdown(f"#### 1. Costo Total al Usuario por Zona -- {product_name}")
     try:
         fig1 = chart_total_cost_by_zone(df, product_key=selected_product)
         st.plotly_chart(fig1, use_container_width=True)
     except Exception as exc:
-        st.error(f"Error generando gráfica: {exc}")
+        st.error(f"Error generando grafica: {exc}")
 
     # Charts 2 & 3 side by side
     col_c2, col_c3 = st.columns(2)
 
     with col_c2:
-        st.markdown("#### 2. Tiempo de Entrega por Zona y Plataforma")
+        st.markdown(f"#### 2. Tiempo de Entrega por Zona -- {product_name}")
         try:
             fig2 = chart_eta_heatmap(df, product_key=selected_product)
             st.plotly_chart(fig2, use_container_width=True)
@@ -282,7 +290,7 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
             st.error(f"Error: {exc}")
 
     with col_c3:
-        st.markdown("#### 3. Distribución de Delivery Fees")
+        st.markdown("#### 3. Distribucion de Delivery Fees (todos los productos)")
         try:
             fig3 = chart_fee_comparison(df)
             st.plotly_chart(fig3, use_container_width=True)
@@ -290,34 +298,12 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
             st.error(f"Error: {exc}")
 
     # Chart 4: Price breakdown (full width)
-    st.markdown("#### 4. Desglose de Costo: Precio del Producto vs Delivery Fee")
+    st.markdown(f"#### 4. Desglose de Costo: Producto vs Fee -- {product_name}")
     try:
         fig4 = chart_price_breakdown(df, product_key=selected_product)
         st.plotly_chart(fig4, use_container_width=True)
     except Exception as exc:
         st.error(f"Error: {exc}")
-
-    st.divider()
-
-    # ── Top 5 Insights (Inteligencia Artificial) ──────────────────────
-    st.header("Top 5 Insights (Inteligencia Artificial)")
-    st.markdown("Genera un análisis estratégico profundo y dinámico alimentando un modelo LLM con los datos reales capturados.")
-
-    if is_ai_ready():
-        if st.button("Generar Insights Estratégicos con OpenAI", type="primary"):
-            with st.spinner("Analizando precios, tiempos de entrega y promociones cruzadas..."):
-                ai_markdown = generate_insights_with_ai(success_df)
-                st.markdown(ai_markdown)
-    else:
-        st.warning("OpenAI no está configurado. Para activar la Inteligencia Artificial, instala `requirements.txt` y renombra tu `.env.example` a `.env` incluyendo un `OPENAI_API_KEY` válido.")
-
-    st.divider()
-
-    # ── Insights Básicos (Locales) ────────────────────────────────────
-    st.header("Insights Básicos (Algorítmicos)")
-    st.markdown("_Insights heurísticos calculados estáticamente (Fallback)._")
-    with st.expander("Ver Análisis Estático", expanded=False):
-        _render_dynamic_insights(success_df, selected_product)
 
     st.divider()
 
@@ -328,6 +314,25 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
 
     # ── Methodology ───────────────────────────────────────────────────
     _render_methodology(df)
+
+    st.divider()
+
+    # ── AI Insights (opcional) ────────────────────────────────────────
+    with st.expander("Analisis con IA (opcional -- requiere OpenAI API key)"):
+        if is_ai_ready():
+            st.markdown(
+                "Genera un analisis estrategico adicional alimentando un LLM "
+                "con los datos recolectados."
+            )
+            if st.button("Generar Insights con IA"):
+                with st.spinner("Consultando modelo..."):
+                    ai_markdown = generate_insights_with_ai(success_df)
+                    st.markdown(ai_markdown)
+        else:
+            st.info(
+                "Para activar esta funcionalidad, configura OPENAI_API_KEY en el "
+                "archivo .env. Consulta .env.example como referencia."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -341,16 +346,12 @@ def _render_executive_summary(df: pd.DataFrame, product_key: str) -> None:
     platforms = df["platform"].unique()
     zones = df["zone"].unique()
     n_success = len(df)
-    total_rows_all = n_success  # already filtered to success
 
-    # Compute key metrics
     df = df.copy()
     df["total_cost"] = df["price"].fillna(0) + df["delivery_fee"].fillna(0)
 
     avg_price = df["price"].mean()
-    avg_fee = df["delivery_fee"].mean()
     avg_eta = df["estimated_time_min"].mean()
-    avg_total = df["total_cost"].mean()
 
     # KPI row
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -683,7 +684,7 @@ def _render_dynamic_insights(df: pd.DataFrame, product_key: str) -> None:
         return
 
     for i, insight in enumerate(insights):
-        with st.expander(f"**Insight {i + 1}: {insight['title']}**", expanded=(i < 2)):
+        with st.expander(f"Insight {i + 1}: {insight['title']}", expanded=True):
             st.markdown(f"**Finding:** {insight['finding']}")
             st.markdown(f"**Impacto:** {insight['impacto']}")
             st.markdown(f"**Recomendacion:** {insight['recomendacion']}")
@@ -770,20 +771,24 @@ def _render_methodology(df: pd.DataFrame) -> None:
 **Fuentes de datos:** Scraping directo de las apps web de Rappi, Uber Eats y DiDi Food
 mediante Playwright (browser automation).
 
-**Geografía:** 5 zonas representativas de CDMX, seleccionadas para cubrir variabilidad
-socioeconómica: Polanco (premium), Condesa/Roma (alta competencia), Centro Histórico
-(alto volumen), Coyoacán (clase media), Iztapalapa (periferia).
+**Geografia:** 5 zonas representativas de CDMX, seleccionadas para cubrir variabilidad
+socioeconomica: Polanco (premium), Condesa/Roma (alta competencia), Centro Historico
+(alto volumen), Coyoacan (clase media), Iztapalapa (periferia).
 
 **Productos de referencia:**
-- **Big Mac** (McDonald's) — producto estandarizado disponible en las 3 plataformas
-- **Coca-Cola 600ml** (tienda de conveniencia) — producto retail comparable
+- **Big Mac** (McDonald's) -- producto estandarizado, categoria restaurante
+- **Whopper** (Burger King) -- producto estandarizado, categoria restaurante
+- **Pizza Pepperoni** -- producto de cadena, categoria restaurante
+- **Coca-Cola 600ml** (tienda / conveniencia) -- producto retail comparable
+- **Coca-Cola 600ml 7-Eleven** -- mismo producto, canal convenience store
 
 **Limitaciones:**
 - Los datos son un snapshot puntual, no promedios temporales
-- Precios dinámicos pueden variar por hora, día y demanda
-- 5 zonas no son estadísticamente significativas para decisiones de pricing en producción
-- Anti-bot measures pueden causar datos faltantes o scrapes fallidos
+- Precios dinamicos pueden variar por hora, dia y demanda
+- 5 zonas no son estadisticamente significativas para decisiones de pricing en produccion
+- Medidas anti-bot pueden causar datos faltantes o scrapes fallidos
 - Promociones personalizadas (basadas en historial) no son capturables sin login
+- DiDi Food no resuelve DNS; todos sus registros aparecen como not_available
 """)
 
     with col2:

@@ -25,6 +25,14 @@ PLATFORM_LABELS: dict[str, str] = {
     "didi_food": "DiDi Food",
 }
 
+PRODUCT_LABELS: dict[str, str] = {
+    "big_mac": "Big Mac",
+    "coca_cola_600ml": "Coca-Cola 600ml",
+    "whopper": "Whopper",
+    "pizza_pepperoni": "Pizza Pepperoni",
+    "coca_cola_600ml_711": "Coca-Cola 600ml (7-Eleven)",
+}
+
 # Orden geográfico norte → sur
 ZONE_ORDER: list[str] = [
     "polanco",
@@ -37,8 +45,8 @@ ZONE_ORDER: list[str] = [
 ZONE_LABELS: dict[str, str] = {
     "polanco": "Polanco",
     "condesa_roma": "Condesa/Roma",
-    "centro_historico": "Centro Histórico",
-    "coyoacan": "Coyoacán",
+    "centro_historico": "Centro Historico",
+    "coyoacan": "Coyoacan",
     "iztapalapa": "Iztapalapa",
 }
 
@@ -75,7 +83,7 @@ def chart_total_cost_by_zone(
 
     color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in prepared["platform"].values}
 
-    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
+    product_name = PRODUCT_LABELS.get(product_key, product_key)
 
     fig = px.bar(
         prepared,
@@ -153,7 +161,7 @@ def chart_eta_heatmap(
         colorbar=dict(title="Minutos"),
     ))
 
-    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
+    product_name = PRODUCT_LABELS.get(product_key, product_key)
 
     fig.update_layout(
         title=title or f"Tiempo de Entrega — {product_name}",
@@ -257,7 +265,7 @@ def chart_price_breakdown(
             legendgroup=plat,
         ))
 
-    product_name = {"big_mac": "Big Mac", "coca_cola_600ml": "Coca-Cola 600ml"}.get(product_key, product_key)
+    product_name = PRODUCT_LABELS.get(product_key, product_key)
     fig.update_layout(
         barmode="stack",
         title=title or f"Desglose de Costo — {product_name}",
