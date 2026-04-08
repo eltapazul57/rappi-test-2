@@ -1,21 +1,12 @@
 """
 rappi.py — Scraper para Rappi México (www.rappi.com.mx).
 
-Selectores validados: 2026-04-07
+Flujo por producto:
+    Big Mac       → busca "McDonald's" → entra al primer resultado → header (fee + ETA) → "Big Mac" en menú
+    Coca-Cola     → busca "OXXO"       → entra al primer resultado → header (fee + ETA) → "Coca-Cola 600" en menú
 
-Flujo:
-1. Navegar a homepage
-2. Setear dirección via input[placeholder*="Dónde quieres"]
-3. Seleccionar sugerencia via li:has-text(...)
-4. Buscar restaurante/tienda via input[type="search"]
-5. Click en primer resultado via a:has-text(...)
-6. Extraer precio, fee, ETA del menú del restaurante
-
-Notas de Rappi:
-- Cloudflare challenge se resuelve automáticamente en < 5s
-- Rappi muestra fee y ETA en las tarjetas de resultado de búsqueda
-- Los precios de producto están en el menú con formato "$ XXX.00"
-- El Big Mac individual está en la sección "A La Carta Comida"
+El fee y ETA se extraen del HEADER del restaurante (más confiable que las tarjetas de búsqueda).
+El precio se extrae del menú dentro del restaurante.
 """
 
 from __future__ import annotations
@@ -50,14 +41,28 @@ from scraper.utils import (
 
 logger = logging.getLogger(__name__)
 
-SEARCH_TERMS: dict[str, list[str]] = {
-    "big_mac": ["McDonald's"],
-    "coca_cola_600ml": ["Coca-Cola 600ml", "Coca Cola 600"],
+# Qué cadena buscar para cada producto
+STORE_SEARCH: dict[str, str] = {
+    "big_mac": "McDonald's",
+    "coca_cola_600ml": "OXXO",
 }
 
+# Patrones para encontrar el producto dentro del menú de la tienda
 PRODUCT_MATCH_PATTERNS: dict[str, list[str]] = {
-    "big_mac": ["Big Mac"],
-    "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca.Cola.*600", "600.*[Cc]oca"],
+    "big_mac": [r"Big Mac\b"],
+    "coca_cola_600ml": [r"Coca[\s\-]Cola.*600", r"Coca.*Cola.*600", r"600.*[Cc]oca"],
+}
+
+# Precio máximo razonable por producto (para descartar falsos positivos)
+PRICE_CEILING: dict[str, float] = {
+    "big_mac": 300.0,
+    "coca_cola_600ml": 80.0,
+}
+
+# Precio mínimo razonable por producto
+PRICE_FLOOR: dict[str, float] = {
+    "big_mac": 80.0,
+    "coca_cola_600ml": 15.0,
 }
 
 
@@ -127,24 +132,22 @@ class RappiScraper(AbstractScraper):
     # ------------------------------------------------------------------
 
     def _screenshot(self, label: str) -> None:
-        """Guarda un screenshot en logs/ para diagnóstico."""
         try:
             from scraper.config import ROOT_DIR
             path = ROOT_DIR / "logs" / f"rappi_{label}.png"
-            self._page.screenshot(path=str(path), full_page=True)
-            logger.info("Rappi: screenshot guardado en %s", path)
+            self._page.screenshot(path=str(path), full_page=False)
+            logger.info("Rappi: screenshot → %s", path)
         except Exception as exc:
-            logger.debug("Rappi: no se pudo guardar screenshot: %s", exc)
+            logger.debug("Rappi: screenshot falló: %s", exc)
 
     def _reset_context(self) -> None:
-        """Cierra el contexto/página actual y abre uno nuevo con el mismo browser."""
         for resource in (getattr(self, "_page", None), getattr(self, "_context", None)):
             try:
                 if resource:
                     resource.close()
             except Exception:
                 pass
-        self._context: BrowserContext = self._browser.new_context(
+        self._context = self._browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=get_random_user_agent(),
             locale="es-MX",
@@ -155,7 +158,7 @@ class RappiScraper(AbstractScraper):
         self._context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-        self._page: Page = self._context.new_page()
+        self._page = self._context.new_page()
         self._page.set_default_timeout(REQUEST_TIMEOUT_MS)
         logger.info("RappiScraper: contexto reiniciado")
 
@@ -166,7 +169,6 @@ class RappiScraper(AbstractScraper):
             page.wait_for_load_state("domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
         except Exception:
             pass
-        # Cloudflare check — use time.sleep to avoid calling page methods while context may be mid-navigation
         for _ in range(6):
             try:
                 title = page.title().lower()
@@ -189,24 +191,23 @@ class RappiScraper(AbstractScraper):
             "button:has-text('Ok, entendido')",
             "button:has-text('Aceptar')",
             "button:has-text('Cerrar')",
+            "button:has-text('Continuar')",
         ]:
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=1000):
+                if loc.is_visible(timeout=800):
                     loc.click(timeout=2000)
                     page.wait_for_timeout(400)
             except (PlaywrightTimeout, Exception):
                 pass
 
     # ------------------------------------------------------------------
-    # Scraping flow
+    # Address
     # ------------------------------------------------------------------
 
     def set_delivery_address(self, address: Address) -> bool:
         page = self._page
         search_text = f"{address.street}, {address.neighborhood}"
-        # Pick the most distinctive word from the street to match suggestions.
-        # Skip leading "Av." / "Avenida" / "Pasaje" etc. which are too generic.
         _SKIP = {"av.", "avenida", "pasaje", "blvd.", "boulevard", "calle"}
         address_keyword = next(
             (w for w in address.street.split() if w.lower().rstrip(".") not in _SKIP and len(w) > 3),
@@ -219,36 +220,28 @@ class RappiScraper(AbstractScraper):
         self._dismiss_popups()
         random_delay()
 
-        # Address input — validated selector
-        addr_input = page.locator('input[placeholder*="Dónde quieres"]')
-        if not addr_input.is_visible(timeout=5000):
-            # Context may be stale from a previous failed navigation; recreate and retry once
+        # Rappi puede cargar con una dirección ya seteada (geolocalización automática).
+        # En ese caso el input "Dónde quieres" no aparece; en su lugar hay un botón
+        # en el header con la dirección actual. Hay que clickearlo para abrir el modal.
+        addr_input = self._open_address_input()
+        if addr_input is None:
+            logger.warning("Rappi: no se pudo abrir el input de dirección zone=%s", address.zone)
             self._screenshot(f"no_addr_input_{address.zone}")
-            logger.warning("Rappi: input no visible, reiniciando contexto para zone=%s", address.zone)
-            self._reset_context()
-            page = self._page
-            addr_input = page.locator('input[placeholder*="Dónde quieres"]')
-            page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
-            self._wait_for_page_ready()
-            self._dismiss_popups()
-            random_delay()
-            if not addr_input.is_visible(timeout=5000):
-                logger.warning("Rappi: input de dirección no visible para zone=%s", address.zone)
-                return False
+            return False
 
         addr_input.click()
         page.wait_for_timeout(500)
+        addr_input.fill("", timeout=5000)
+        page.wait_for_timeout(200)
         addr_input.type(search_text, delay=60)
         random_delay(min_seconds=2.0, max_seconds=3.5)
 
-        # Select address suggestion — Rappi uses plain <li> elements
         suggestion = page.locator(f'li:has-text("{address_keyword}")').first
         if not suggestion.is_visible(timeout=5000):
-            # Log what suggestions ARE visible to help debug the selector
             try:
                 all_li = page.locator("li").all()
                 visible_texts = [li.inner_text() for li in all_li[:10] if li.is_visible(timeout=300)]
-                logger.warning("Rappi: sugerencia no encontrada para '%s'. LIs visibles: %s", address_keyword, visible_texts)
+                logger.warning("Rappi: sugerencia no encontrada para '%s'. LIs: %s", address_keyword, visible_texts)
             except Exception:
                 pass
             self._screenshot(f"no_suggestion_{address.zone}")
@@ -259,8 +252,6 @@ class RappiScraper(AbstractScraper):
         self._wait_for_page_ready()
         self._dismiss_popups()
 
-        # Rappi a veces redirige a /promociones u otras páginas tras setear la dirección.
-        # Volver a la home para asegurar que el search bar esté activo.
         current_url = page.url
         if "/promocion" in current_url or current_url.rstrip("/") != self.BASE_URL.rstrip("/"):
             logger.info("Rappi: redirigió a %s, volviendo a home", current_url)
@@ -268,161 +259,262 @@ class RappiScraper(AbstractScraper):
             self._wait_for_page_ready()
             self._dismiss_popups()
 
-        logger.info("Rappi: dirección seteada para zone=%s (url=%s)", address.zone, page.url)
+        logger.info("Rappi: dirección seteada zone=%s url=%s", address.zone, page.url)
         return True
 
-    def search_product(self, product: Product) -> bool:
+    def _open_address_input(self):
+        """
+        Devuelve el input de dirección listo para escribir.
+
+        Rappi tiene dos estados posibles en el home:
+        1. Sin dirección → aparece `input[placeholder*="Dónde quieres"]` directamente.
+        2. Con dirección (geolocalización automática) → el header muestra la dirección
+           actual como botón; hay que clickearlo para abrir el modal con el input.
+        """
         page = self._page
-        terms = SEARCH_TERMS.get(product.key, [product.display_name])
-        logger.info("Rappi: buscando producto %s", product.key)
 
-        for term in terms:
-            # Dismiss overlays BEFORE locating the search input, so it's not covered
-            self._dismiss_popups()
+        # Estado 1: input directo ya visible
+        direct = page.locator('input[placeholder*="Dónde quieres"]').first
+        if direct.is_visible(timeout=3000):
+            return direct
 
-            search_input = page.locator('input[type="search"]').first
+        # Estado 2: hay una dirección activa en el header — intentar abrirla
+        header_btn_selectors = [
+            # Botón de dirección en el header (contiene ícono de pin + texto)
+            'header [data-testid*="address"]',
+            'header [data-testid*="location"]',
+            'header button:has([data-icon*="pin"])',
+            'header button:has([data-icon*="location"])',
+            # Fallback genérico: el texto de la dirección actual en el header es un botón/link
+            'header button:has(svg)',
+            '[class*="address-bar"]',
+            '[class*="location-bar"]',
+            '[class*="delivery-address"]',
+            # Selector por aria
+            'button[aria-label*="direcci"]',
+            'button[aria-label*="ubicaci"]',
+        ]
+        for sel in header_btn_selectors:
             try:
-                search_input.wait_for(state="visible", timeout=8000)
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=1500):
+                    btn.click()
+                    page.wait_for_timeout(800)
+                    # Ahora debe aparecer el input dentro del modal
+                    for input_sel in [
+                        'input[placeholder*="Dónde quieres"]',
+                        'input[placeholder*="Busca"]',
+                        'input[placeholder*="direcci"]',
+                        'input[type="search"]',
+                        'input[type="text"]',
+                    ]:
+                        inp = page.locator(input_sel).first
+                        if inp.is_visible(timeout=3000):
+                            return inp
             except Exception:
-                logger.warning("Rappi: barra de búsqueda no visible para '%s'", term)
                 continue
 
-            search_input.scroll_into_view_if_needed(timeout=3000)
-            search_input.click(timeout=5000)
-            page.wait_for_timeout(500)
+        # Último recurso: cualquier input visible en la página después de esperar
+        page.wait_for_timeout(1000)
+        for input_sel in [
+            'input[placeholder*="Dónde quieres"]',
+            'input[placeholder*="Busca"]',
+            'input[placeholder*="direcci"]',
+        ]:
+            inp = page.locator(input_sel).first
+            if inp.is_visible(timeout=2000):
+                return inp
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Search: store first, then product inside
+    # ------------------------------------------------------------------
+
+    def search_product(self, product: Product) -> bool:
+        """
+        Busca la CADENA (McDonald's / OXXO) en el buscador de Rappi,
+        entra al primer resultado, y deja la página lista para extract_data().
+        """
+        page = self._page
+        store_name = STORE_SEARCH.get(product.key, product.display_name)
+        logger.info("Rappi: buscando tienda '%s' para producto %s", store_name, product.key)
+
+        self._dismiss_popups()
+
+        search_input = page.locator('input[type="search"]').first
+        try:
+            search_input.wait_for(state="visible", timeout=8000)
+        except PlaywrightTimeout:
+            logger.warning("Rappi: barra de búsqueda no visible para '%s'", store_name)
+            self._screenshot(f"no_search_input_{product.key}")
+            return False
+
+        search_input.scroll_into_view_if_needed(timeout=3000)
+        search_input.click(timeout=5000)
+        page.wait_for_timeout(400)
+        search_input.fill("", timeout=5000)
+        page.wait_for_timeout(200)
+        search_input.type(store_name, delay=60)
+        random_delay(min_seconds=1.5, max_seconds=2.5)
+        page.keyboard.press("Enter")
+        random_delay(min_seconds=3.0, max_seconds=5.0)
+        self._wait_for_page_ready()
+
+        # Click the first store result card
+        entered = self._click_first_store_result(store_name)
+        if not entered:
+            self._screenshot(f"no_store_result_{product.key}")
+            logger.warning("Rappi: no se encontró tienda '%s'", store_name)
+            return False
+
+        random_delay(min_seconds=2.5, max_seconds=4.0)
+        self._wait_for_page_ready()
+        self._dismiss_popups()
+
+        # Now we are inside the restaurant/store page — extract header info
+        self._extract_header_info(store_name, product)
+
+        logger.info("Rappi: dentro de '%s' — fee=%s eta=%s", store_name, self._store_fee, self._store_eta)
+        return True
+
+    def _click_first_store_result(self, store_name: str) -> bool:
+        """Intenta hacer click en la primera tarjeta de la tienda en resultados."""
+        page = self._page
+
+        # Strategy 1: link with store name in text (most reliable)
+        for sel in [
+            f'a:has-text("{store_name}")',
+            f'[class*="store"]:has-text("{store_name}")',
+            f'[class*="card"]:has-text("{store_name}")',
+        ]:
             try:
-                search_input.fill("", timeout=10000)
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=3000):
+                    loc.click()
+                    return True
             except Exception:
-                # Last resort: force=True bypasses visibility check
-                try:
-                    search_input.fill("", force=True, timeout=5000)
-                except Exception as exc:
-                    logger.warning("Rappi: fill falló incluso con force=True: %s", exc)
-                    self._screenshot(f"fill_failed_{product.key}")
-                    continue
-            page.wait_for_timeout(300)
-            search_input.type(term, delay=60)
-            random_delay(min_seconds=1.5, max_seconds=2.5)
-            page.keyboard.press("Enter")
-            random_delay(min_seconds=3.0, max_seconds=5.0)
-            self._wait_for_page_ready()
+                continue
 
-            # Extract ETA and fee from search result cards BEFORE entering restaurant
-            self._extract_store_info_from_search(term)
-
-            # Click first result card — for product searches the link won't have the
-            # product name, so fall back to the first anchor in the results area.
-            result_link = page.locator(f'a:has-text("{term}")').first
-            if not result_link.is_visible(timeout=3000):
-                # Take the first clickable store card link on the page
-                result_link = page.locator('a[href*="/tienda/"], a[href*="/store/"]').first
-            if not result_link.is_visible(timeout=3000):
-                result_link = page.locator("a[href]").first
-
-            if result_link.is_visible(timeout=5000):
-                result_link.click()
-                random_delay(min_seconds=3.0, max_seconds=5.0)
-                self._wait_for_page_ready()
-                logger.info("Rappi: entró al resultado para '%s'", term)
-                return True
-
-            logger.warning("Rappi: no se encontró resultado para '%s'", term)
+        # Strategy 2: first store/tienda link regardless of text
+        for sel in [
+            'a[href*="/tienda/"]',
+            'a[href*="/store/"]',
+            'a[href*="/restaurante/"]',
+        ]:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=2000):
+                    loc.click()
+                    return True
+            except Exception:
+                continue
 
         return False
 
-    def _extract_store_info_from_search(self, term: str) -> None:
-        """Extrae ETA, fee y promos de la tarjeta de resultado de búsqueda."""
+    def _extract_header_info(self, store_name: str, product: Product) -> None:
+        """
+        Extrae delivery fee, ETA y promos del header de la página del restaurante.
+        En Rappi el header contiene algo como:
+            "McDonald's Polanco · 4.8 · 14 min · Envío Gratis"
+            "OXXO Insurgentes · 3.9 · 20 min · $ 29.00"
+        """
         page = self._page
-        self._store_fee = None
-        self._store_eta = None
-        self._store_promo = ""
 
+        # -- ETA --
         try:
-            # Rappi search cards structure (each line separated by \n):
-            #   "McDonald's Polanco\n4.5\n12 min\n•\nEnvío Gratis\n•\nAplican TyC"
-            #   "McDonald's Roma\n4.3\n18 min\n•\n$ 29.00\n•\n..."
-            # The fee appears AFTER the ETA and a bullet separator.
-            # The raw "$" before the fee could be confused with a product price,
-            # so we parse line-by-line and use context.
-
-            card = page.locator(f'a:has-text("{term}")').first
-            if not card.is_visible(timeout=3000):
-                card = page.locator('a[href*="/tienda/"], a[href*="/store/"]').first
-                if not card.is_visible(timeout=2000):
-                    return
-            card_text = card.inner_text()
-            lines = [l.strip() for l in card_text.split("\n") if l.strip()]
-
-            # ETA: "12 min" or "12-18 min"
-            eta_match = re.search(r"(\d+)\s*(?:[-–]\s*\d+\s*)?min", card_text)
-            if eta_match:
-                self._store_eta = parse_time_minutes(eta_match.group(0))
-
-            # Fee: Look for fee-specific patterns line by line.
-            # The fee line typically comes after ETA and a "•" separator.
-            # It shows as "Envío Gratis", "$ 0.00", "$ 29.00", "Gratis", etc.
-            found_eta = False
-            for line in lines:
-                line_lower = line.lower()
-
-                # Track when we've passed the ETA line
-                if re.search(r"\d+\s*min", line):
-                    found_eta = True
-                    continue
-
-                # Skip separator bullets
-                if line in ("•", "·", "|"):
-                    continue
-
-                # "Envío Gratis" or "Gratis" on its own line
-                if re.search(r"env[íi]o\s*gratis|^gratis$", line_lower):
-                    self._store_fee = 0.0
-                    break
-
-                # "$ 0.00" after ETA = free delivery
-                if found_eta and re.match(r"^\$\s*0[.,]?0*$", line.strip()):
-                    self._store_fee = 0.0
-                    break
-
-                # "$ 29.00" after ETA = delivery fee (not a product price)
-                if found_eta and re.match(r"^\$\s*[\d,.]+$", line.strip()):
-                    val = parse_price(line.strip())
-                    if val is not None and val < 100:  # fees are typically < $100
-                        self._store_fee = val
+            eta_els = page.locator('text=/\\d+\\s*(?:–|-)?\\s*\\d*\\s*min/').all()
+            for el in eta_els[:5]:
+                if el.is_visible(timeout=800):
+                    eta = parse_time_minutes(el.inner_text())
+                    if eta:
+                        self._store_eta = eta
                         break
+        except Exception:
+            pass
 
-                # Explicit label: "Envío $ 29" or "Envío de $ 15"
-                fee_label = re.search(r"env[íi]o\s*(?:de\s*)?\$\s*([\d,.]+)", line_lower)
-                if fee_label:
-                    self._store_fee = parse_price(f"${fee_label.group(1)}")
-                    break
+        # -- Fee: check gratis first, then look for $XX --
+        try:
+            gratis = page.locator('text=/[Ee]nv[íi]o\\s*[Gg]ratis|[Ee]ntrega\\s*[Gg]ratis/').first
+            if gratis.is_visible(timeout=2000):
+                self._store_fee = 0.0
+        except Exception:
+            pass
 
-            # --- Promos ---
-            promos = []
+        if self._store_fee is None:
+            # Look for fee in the page header area — walk all visible short text nodes
+            try:
+                # Rappi header uses a bar with "· $XX ·" or similar
+                header_candidates = page.locator(
+                    'header *, [class*="header"] *, [class*="restaurant-info"] *, [class*="store-info"] *'
+                ).all()
+                for el in header_candidates[:40]:
+                    try:
+                        if not el.is_visible(timeout=300):
+                            continue
+                        text = el.inner_text().strip()
+                        if not text or len(text) > 60:
+                            continue
+                        if re.search(r"gratis|free", text, re.IGNORECASE):
+                            self._store_fee = 0.0
+                            break
+                        m = re.search(r"^\$\s*([\d,.]+)$", text)
+                        if m:
+                            val = parse_price(f"${m.group(1)}")
+                            if val is not None and 0 < val < 100:
+                                self._store_fee = val
+                                break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if self._store_fee is None:
+            # Fallback: scan entire page top section for first fee-like pattern
+            try:
+                page_text = page.locator("body").inner_text()
+                # Look for fee right after ETA pattern
+                m = re.search(
+                    r"\d+\s*min[^$\n]{0,30}\$\s*([\d,.]+)",
+                    page_text[:3000],
+                )
+                if m:
+                    val = parse_price(f"${m.group(1)}")
+                    if val is not None and 0 < val < 100:
+                        self._store_fee = val
+            except Exception:
+                pass
+
+        # -- Promos --
+        try:
             promo_patterns = [
                 r"env[íi]o\s*gratis",
-                r"descuento",
-                r"aplican\s*TyC",
-                r"primer\s*pedido",
-                r"\d+%\s*(?:de\s*)?desc",
+                r"entrega\s*gratis",
+                r"\d+\s*%\s*(?:de\s*)?(?:desc|off)",
                 r"2\s*x\s*1",
                 r"ahorra",
                 r"oferta",
+                r"primer\s*pedido",
                 r"promo",
-                r"gratis",
             ]
-            for line in lines:
+            page_top = page.locator("body").inner_text()[:4000]
+            promos = []
+            for line in page_top.split("\n"):
+                line = line.strip()
+                if not line or len(line) > 120:
+                    continue
                 for pat in promo_patterns:
                     if re.search(pat, line, re.IGNORECASE):
-                        if line not in promos and len(line) < 100:
+                        if line not in promos:
                             promos.append(line)
                         break
-            self._store_promo = "; ".join(promos[:3]) if promos else ""
+            self._store_promo = "; ".join(promos[:3])
+        except Exception:
+            pass
 
-            logger.info("Rappi search card: fee=%s eta=%s promo='%s'",
-                        self._store_fee, self._store_eta, self._store_promo)
-        except (PlaywrightTimeout, Exception) as exc:
-            logger.debug("No se pudo extraer info de tarjeta: %s", exc)
+    # ------------------------------------------------------------------
+    # Data extraction
+    # ------------------------------------------------------------------
 
     def extract_data(self, address: Address, product: Product) -> ScrapeResult:
         page = self._page
@@ -431,14 +523,14 @@ class RappiScraper(AbstractScraper):
         price = self._extract_product_price(product)
 
         if price is None:
+            self._screenshot(f"no_price_{product.key}_{address.zone}")
             logger.warning("Rappi: precio no encontrado para %s/%s", product.key, address.zone)
             return ScrapeResult.not_available(self.platform, address, product)
 
-        # Fee and ETA from search card (extracted earlier)
         fee = self._store_fee
         eta = self._store_eta
 
-        # Try to extract from restaurant page if not found in search card
+        # Last-resort fee extraction from restaurant page if header parse failed
         if fee is None:
             fee = self._extract_fee_from_page()
         if eta is None:
@@ -458,47 +550,57 @@ class RappiScraper(AbstractScraper):
         )
 
     def _extract_product_price(self, product: Product) -> float | None:
-        """Busca el precio del producto específico en el menú."""
+        """Busca el precio del producto en el menú del restaurante/tienda."""
         page = self._page
-        patterns = PRODUCT_MATCH_PATTERNS.get(product.key, [product.display_name])
+        patterns = PRODUCT_MATCH_PATTERNS.get(product.key, [re.escape(product.display_name)])
+        floor = PRICE_FLOOR.get(product.key, 10.0)
+        ceiling = PRICE_CEILING.get(product.key, 500.0)
 
         for pattern in patterns:
             try:
-                # Find product items containing the exact name with a price
-                items = page.locator(f'text=/{pattern}/i').all()
+                items = page.locator(f"text=/{pattern}/i").all()
                 for item in items:
-                    if not item.is_visible(timeout=1000):
+                    if not item.is_visible(timeout=800):
                         continue
-                    # Navigate up to the container that includes the price
-                    for level in range(2, 5):
-                        ancestor = item.locator(f"xpath=ancestor::*[{level}]")
-                        text = ancestor.inner_text()
-                        # Look for a standalone product (not a combo/McTrío)
-                        lines = text.strip().split("\n")
-                        # Find the line with the product name and the price
-                        name_line = None
-                        price_val = None
-                        for line in lines:
-                            if re.search(pattern, line, re.IGNORECASE):
-                                name_line = line
-                            if line.strip().startswith("$"):
-                                price_val = parse_price(line.strip())
-                        if name_line and price_val and price_val > 10:
-                            # Avoid combo items — skip if "McTrío" or "+" in name
-                            if "McTrío" in text.split("$")[0] or "+" in name_line:
+                    # Walk up to find the container with both name and price
+                    for level in range(2, 6):
+                        try:
+                            ancestor = item.locator(f"xpath=ancestor::*[{level}]")
+                            text = ancestor.inner_text()
+                            lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+                            # Must have name line matching pattern
+                            has_name = any(re.search(pattern, l, re.IGNORECASE) for l in lines)
+                            if not has_name:
                                 continue
-                            logger.info("Rappi: precio encontrado %s = $%.2f", pattern, price_val)
-                            return price_val
+
+                            # Skip combo/McTrío containers
+                            combined = " ".join(lines)
+                            if re.search(r"McTr[íi]o|combo|paquete|\+", combined, re.IGNORECASE):
+                                # Only skip if the combo keyword appears before the price
+                                # (it's a combo item, not an individual product)
+                                continue
+
+                            # Find price lines
+                            for line in lines:
+                                if line.startswith("$"):
+                                    val = parse_price(line)
+                                    if val and floor <= val <= ceiling:
+                                        logger.info("Rappi: precio %s = $%.2f", pattern, val)
+                                        return val
+                        except Exception:
+                            continue
             except (PlaywrightTimeout, Exception):
                 continue
 
-        # Fallback: grab the first reasonable price from any $ element
+        # Fallback: first price in range anywhere on page
         try:
             price_els = page.locator('text=/^\\$\\s*\\d/').all()
-            for el in price_els[:15]:
-                if el.is_visible(timeout=500):
+            for el in price_els[:20]:
+                if el.is_visible(timeout=400):
                     val = parse_price(el.inner_text())
-                    if val and 15 < val < 500:
+                    if val and floor <= val <= ceiling:
+                        logger.info("Rappi: precio fallback %s = $%.2f", product.key, val)
                         return val
         except (PlaywrightTimeout, Exception):
             pass
@@ -506,43 +608,38 @@ class RappiScraper(AbstractScraper):
         return None
 
     def _extract_fee_from_page(self) -> float | None:
-        """Extrae delivery fee de la página del restaurante."""
+        """Last-resort fee extraction from restaurant page."""
         page = self._page
         try:
-            # 1. "Envío Gratis" / "Entrega Gratis" wins immediately
-            gratis = page.locator(r'text=/[Ee]nv[íi]o\s*[Gg]ratis|[Ee]ntrega\s*[Gg]ratis/').first
-            if gratis.is_visible(timeout=2000):
+            gratis = page.locator('text=/[Ee]nv[íi]o\\s*[Gg]ratis|[Ee]ntrega\\s*[Gg]ratis/').first
+            if gratis.is_visible(timeout=1500):
                 return 0.0
 
-            # 2. Look for fee labels and extract the price nearby
             for sel in [
-                r'text=/[Cc]osto de env[íi]o/',
-                r'text=/[Tt]arifa de entrega/',
+                'text=/[Cc]osto de env[íi]o/',
+                'text=/[Tt]arifa de entrega/',
                 'text=/[Ee]nv[íi]o/',
             ]:
                 for el in page.locator(sel).all()[:5]:
                     try:
-                        if not el.is_visible(timeout=500):
+                        if not el.is_visible(timeout=400):
                             continue
                         text = el.inner_text()
                         if re.search(r"gratis|free", text, re.IGNORECASE):
                             return 0.0
-                        # Extract price from the element text itself
-                        fee_match = re.search(r"\$\s*([\d,.]+)", text)
-                        if fee_match:
-                            val = parse_price(f"${fee_match.group(1)}")
+                        m = re.search(r"\$\s*([\d,.]+)", text)
+                        if m:
+                            val = parse_price(f"${m.group(1)}")
                             if val is not None and val < 100:
                                 return val
-                        # Try parent and sibling which may contain the price value
                         for xpath in ["xpath=..", "xpath=following-sibling::*[1]"]:
                             try:
-                                related = el.locator(xpath)
-                                related_text = related.inner_text()
+                                related_text = el.locator(xpath).inner_text()
                                 if re.search(r"gratis|free|\$\s*0\b", related_text, re.IGNORECASE):
                                     return 0.0
-                                fee_match = re.search(r"\$\s*([\d,.]+)", related_text)
-                                if fee_match:
-                                    val = parse_price(f"${fee_match.group(1)}")
+                                m = re.search(r"\$\s*([\d,.]+)", related_text)
+                                if m:
+                                    val = parse_price(f"${m.group(1)}")
                                     if val is not None and val < 100:
                                         return val
                             except Exception:
@@ -554,12 +651,11 @@ class RappiScraper(AbstractScraper):
         return None
 
     def _extract_eta_from_page(self) -> int | None:
-        """Extrae ETA de la página del restaurante."""
+        """Last-resort ETA extraction."""
         page = self._page
         try:
-            eta_els = page.locator('text=/\\d+\\s*min/').all()
-            for el in eta_els[:5]:
-                if el.is_visible(timeout=1000):
+            for el in page.locator('text=/\\d+\\s*min/').all()[:5]:
+                if el.is_visible(timeout=800):
                     return parse_time_minutes(el.inner_text())
         except (PlaywrightTimeout, Exception):
             pass
