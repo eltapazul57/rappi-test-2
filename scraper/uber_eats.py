@@ -53,12 +53,12 @@ logger = logging.getLogger(__name__)
 
 SEARCH_TERMS: dict[str, list[str]] = {
     "big_mac": ["McDonald's"],
-    "coca_cola_600ml": ["OXXO"],
+    "coca_cola_600ml": ["Coca-Cola 600ml", "Coca Cola 600"],
 }
 
 PRODUCT_MATCH_PATTERNS: dict[str, list[str]] = {
     "big_mac": ["Big Mac"],
-    "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca-Cola"],
+    "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca.Cola.*600", "600.*[Cc]oca"],
 }
 
 
@@ -128,6 +128,15 @@ class UberEatsScraper(AbstractScraper):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _screenshot(self, label: str) -> None:
+        try:
+            from scraper.config import ROOT_DIR
+            path = ROOT_DIR / "logs" / f"uber_{label}.png"
+            self._page.screenshot(path=str(path), full_page=True)
+            logger.info("UberEats: screenshot guardado en %s", path)
+        except Exception as exc:
+            logger.debug("UberEats: no se pudo guardar screenshot: %s", exc)
+
     def _wait_for_page_ready(self) -> None:
         page = self._page
         try:
@@ -195,7 +204,22 @@ class UberEatsScraper(AbstractScraper):
         self._wait_for_page_ready()
         self._dismiss_popups()
 
-        logger.info("UberEats: dirección seteada para zone=%s", address.zone)
+        # Uber Eats puede redirigir a /category-feed/... que no tiene search input.
+        # Navegar explícitamente al feed principal preservando el parámetro de dirección.
+        current_url = page.url
+        if "/feed" not in current_url or "category-feed" in current_url:
+            # Extraer el parámetro pl= de la URL actual para preservar la dirección
+            import re as _re
+            pl_match = _re.search(r"[?&](pl=[^&]+)", current_url)
+            feed_url = self.BASE_URL + "/feed"
+            if pl_match:
+                feed_url += "?" + pl_match.group(1) + "&diningMode=DELIVERY"
+            logger.info("UberEats: redirigido a %s, navegando a feed: %s", current_url, feed_url)
+            page.goto(feed_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+            self._wait_for_page_ready()
+            self._dismiss_popups()
+
+        logger.info("UberEats: dirección seteada para zone=%s — url=%s", address.zone, page.url)
         return True
 
     def search_product(self, product: Product) -> bool:
@@ -207,11 +231,30 @@ class UberEatsScraper(AbstractScraper):
             # Dismiss overlays BEFORE locating the search input
             self._dismiss_popups()
 
-            search_input = page.locator('input[placeholder*="Buscar"]').first
+            # Try multiple selectors — Uber Eats placeholder varies by locale
+            search_input = page.locator(
+                'input[placeholder*="Buscar"], input[placeholder*="Search"], '
+                'input[type="search"], input[data-testid*="search"], '
+                'input[placeholder*="Busca"]'
+            ).first
             try:
                 search_input.wait_for(state="visible", timeout=8000)
             except Exception:
-                logger.warning("UberEats: barra de búsqueda no visible para '%s'", term)
+                logger.warning("UberEats: barra de búsqueda no visible para '%s' — url=%s", term, page.url)
+                # Log all inputs to find the correct selector
+                try:
+                    all_inputs = page.locator("input").all()
+                    logger.warning("  Total inputs en página: %d", len(all_inputs))
+                    for i, inp in enumerate(all_inputs[:10]):
+                        try:
+                            logger.warning("  input[%d]: type=%s placeholder=%s visible=%s",
+                                i, inp.get_attribute("type"), inp.get_attribute("placeholder"),
+                                inp.is_visible(timeout=200))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                self._screenshot(f"no_search_input_{term.replace(' ', '_')}")
                 continue
 
             search_input.scroll_into_view_if_needed()
@@ -228,28 +271,26 @@ class UberEatsScraper(AbstractScraper):
             # Extract store info from search result cards
             self._extract_store_info_from_search(term)
 
-            # Click first result to enter restaurant
+            # Click first result — for product searches the card won't have the
+            # product name, so fall back to the first store link found.
             result = page.locator(f'h3:has-text("{term}")').first
+            if not result.is_visible(timeout=3000):
+                result = page.locator(f'a:has-text("{term}")').first
+            if not result.is_visible(timeout=3000):
+                result = page.locator('a[href*="/store/"], a[href*="/tienda/"]').first
+            if not result.is_visible(timeout=3000):
+                result = page.locator("main a[href]").first
+
             if result.is_visible(timeout=5000):
                 result.click()
                 random_delay(min_seconds=3.0, max_seconds=5.0)
                 self._wait_for_page_ready()
-                # Verify we entered the restaurant (not a challenge page)
                 if "challenge" in page.url:
                     logger.warning("UberEats: challenge detectado al entrar al restaurante")
                     page.go_back()
                     random_delay()
-                    # We still have data from search cards
                     return True
-                logger.info("UberEats: entró al restaurante '%s'", term)
-                return True
-
-            # Fallback: try clicking any McDonald's link
-            result2 = page.locator(f'a:has-text("{term}")').first
-            if result2.is_visible(timeout=3000):
-                result2.click(force=True)
-                random_delay(min_seconds=3.0, max_seconds=5.0)
-                self._wait_for_page_ready()
+                logger.info("UberEats: entró al resultado para '%s'", term)
                 return True
 
             logger.warning("UberEats: no se encontró resultado para '%s'", term)
@@ -388,7 +429,7 @@ class UberEatsScraper(AbstractScraper):
         page = self._page
         try:
             # "Envío gratis" / "Entrega gratis" wins immediately
-            gratis = page.locator('text=/[Ee]nv[íi]o\s*gratis|[Ee]ntrega\s*gratis/').first
+            gratis = page.locator(r'text=/[Ee]nv[íi]o\s*gratis|[Ee]ntrega\s*gratis/').first
             if gratis.is_visible(timeout=1500):
                 return 0.0
 

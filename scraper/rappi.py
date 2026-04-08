@@ -52,12 +52,12 @@ logger = logging.getLogger(__name__)
 
 SEARCH_TERMS: dict[str, list[str]] = {
     "big_mac": ["McDonald's"],
-    "coca_cola_600ml": ["OXXO", "Turbo"],
+    "coca_cola_600ml": ["Coca-Cola 600ml", "Coca Cola 600"],
 }
 
 PRODUCT_MATCH_PATTERNS: dict[str, list[str]] = {
     "big_mac": ["Big Mac"],
-    "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca-Cola"],
+    "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca.Cola.*600", "600.*[Cc]oca"],
 }
 
 
@@ -310,13 +310,20 @@ class RappiScraper(AbstractScraper):
             # Extract ETA and fee from search result cards BEFORE entering restaurant
             self._extract_store_info_from_search(term)
 
-            # Click first matching restaurant result
+            # Click first result card — for product searches the link won't have the
+            # product name, so fall back to the first anchor in the results area.
             result_link = page.locator(f'a:has-text("{term}")').first
+            if not result_link.is_visible(timeout=3000):
+                # Take the first clickable store card link on the page
+                result_link = page.locator('a[href*="/tienda/"], a[href*="/store/"]').first
+            if not result_link.is_visible(timeout=3000):
+                result_link = page.locator("a[href]").first
+
             if result_link.is_visible(timeout=5000):
                 result_link.click()
                 random_delay(min_seconds=3.0, max_seconds=5.0)
                 self._wait_for_page_ready()
-                logger.info("Rappi: entró al restaurante para '%s'", term)
+                logger.info("Rappi: entró al resultado para '%s'", term)
                 return True
 
             logger.warning("Rappi: no se encontró resultado para '%s'", term)
