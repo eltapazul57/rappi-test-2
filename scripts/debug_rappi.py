@@ -110,19 +110,15 @@ with sync_playwright() as pw:
             page.screenshot(path="logs/debug_05_after_address.png")
             pause("Dirección seteada")
 
-            # ── 5. Buscar barra de search ───────────────────────────────────
-            search_input = page.locator('input[type="search"]').first
-            logger.info("input[type=search] visible: %s", search_input.is_visible(timeout=5000))
-            page.screenshot(path="logs/debug_06_search_bar.png")
-
+            # ── 5. Cerrar banners / manejar redirect ANTES de buscar el input ──
             # Dismiss only safe close buttons (never navigation buttons like PROMOCIONES)
             for sel in ["button:has-text('Ok, entendido')", "button:has-text('Aceptar')", "button:has-text('Cerrar')"]:
                 try:
                     btn = page.locator(sel).first
-                    if btn.is_visible(timeout=500):
+                    if btn.is_visible(timeout=800):
                         logger.info("Cerrando banner: %s", sel)
                         btn.click(timeout=1000)
-                        time.sleep(0.4)
+                        time.sleep(0.5)
                 except Exception:
                     pass
 
@@ -136,7 +132,18 @@ with sync_playwright() as pw:
                 except Exception:
                     pass
 
-            page.screenshot(path="logs/debug_06b_after_dismiss.png")
+            page.screenshot(path="logs/debug_06_after_dismiss.png")
+
+            # ── 6. Buscar barra de search ───────────────────────────────────
+            # Esperar a que el input esté visible Y habilitado antes de interactuar
+            search_input = page.locator('input[type="search"]').first
+            logger.info("Esperando input[type=search] visible y editable...")
+            try:
+                search_input.wait_for(state="visible", timeout=10000)
+            except Exception:
+                logger.error("input[type=search] no se volvió visible en 10s")
+            logger.info("input[type=search] visible: %s", search_input.is_visible(timeout=1000))
+            page.screenshot(path="logs/debug_06b_search_bar.png")
 
             if search_input.is_visible(timeout=1000):
                 search_input.scroll_into_view_if_needed()
