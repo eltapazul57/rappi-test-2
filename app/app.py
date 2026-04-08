@@ -1,12 +1,12 @@
 """
-app.py — Dashboard de Competitive Intelligence para Rappi.
+app.py — Dashboard de Inteligencia Competitiva para Rappi.
 
 Ejecución:
     streamlit run app/app.py
 
 Pestañas:
     1. Datos & Scraping — tabla de datos, botón de scraping real, filtros
-    2. Insights Competitivos — Top 5 findings + 3 visualizaciones
+    2. Hallazgos Competitivos — 5 hallazgos principales + 3 visualizaciones
 
 Sin fallback: si no existe competitive_data.csv, se muestra estado vacío
 con invitación a ejecutar el scraper.
@@ -42,7 +42,7 @@ from app.charts import (
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Competitive Intelligence — Rappi vs Uber Eats vs DiDi Food",
+    page_title="Inteligencia Competitiva — Rappi vs Uber Eats vs DiDi Food",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -241,8 +241,8 @@ def _run_scraping_subprocess(platforms: list[str] | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
-    st.title("Informe de Competitive Intelligence")
-    st.caption("Analisis comparativo: Rappi vs Uber Eats vs DiDi Food -- CDMX, Mexico")
+    st.title("Informe de Inteligencia Competitiva")
+    st.caption("Análisis comparativo: Rappi vs Uber Eats vs DiDi Food — CDMX, México")
 
     success_df = df[df["scrape_status"] == "success"].copy() if not df.empty else df
 
@@ -256,10 +256,10 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
     st.divider()
 
     # ── Top 5 Insights ────────────────────────────────────────────────
-    st.header("Top 5 Insights Competitivos")
+    st.header("5 Hallazgos Competitivos Principales")
     st.markdown(
-        "Insights calculados a partir de los datos recolectados. "
-        "Cada insight incluye hallazgo, impacto al negocio y recomendacion."
+        "Hallazgos calculados a partir de los datos recolectados. "
+        "Cada hallazgo incluye descripción, impacto al negocio y recomendación."
     )
     _render_dynamic_insights(success_df, selected_product)
 
@@ -290,7 +290,7 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
             st.error(f"Error: {exc}")
 
     with col_c3:
-        st.markdown("#### 3. Distribucion de Delivery Fees (todos los productos)")
+        st.markdown("#### 3. Distribución de Costos de Envío (todos los productos)")
         try:
             fig3 = chart_fee_comparison(df)
             st.plotly_chart(fig3, use_container_width=True)
@@ -298,7 +298,7 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
             st.error(f"Error: {exc}")
 
     # Chart 4: Price breakdown (full width)
-    st.markdown(f"#### 4. Desglose de Costo: Producto vs Fee -- {product_name}")
+    st.markdown(f"#### 4. Desglose de Costo: Producto vs Envío — {product_name}")
     try:
         fig4 = chart_price_breakdown(df, product_key=selected_product)
         st.plotly_chart(fig4, use_container_width=True)
@@ -318,19 +318,19 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
     st.divider()
 
     # ── AI Insights (opcional) ────────────────────────────────────────
-    with st.expander("Analisis con IA (opcional -- requiere OpenAI API key)"):
+    with st.expander("Análisis con IA (opcional — requiere clave de API de OpenAI)"):
         if is_ai_ready():
             st.markdown(
-                "Genera un analisis estrategico adicional alimentando un LLM "
+                "Genera un análisis estratégico adicional alimentando un LLM "
                 "con los datos recolectados."
             )
-            if st.button("Generar Insights con IA"):
+            if st.button("Generar Hallazgos con IA"):
                 with st.spinner("Consultando modelo..."):
                     ai_markdown = generate_insights_with_ai(success_df)
                     st.markdown(ai_markdown)
         else:
             st.info(
-                "Para activar esta funcionalidad, configura OPENAI_API_KEY en el "
+                "Para activar esta funcionalidad, configura la variable OPENAI_API_KEY en el "
                 "archivo .env. Consulta .env.example como referencia."
             )
 
@@ -412,7 +412,7 @@ def _render_executive_summary(df: pd.DataFrame, product_key: str) -> None:
     fee_pct = fee_filled / len(df) * 100 if len(df) > 0 else 0
     if fee_pct < 100:
         summary_parts.append(
-            f"El delivery fee fue capturado en {fee_pct:.0f}% de los registros — "
+            f"El costo de envío fue capturado en {fee_pct:.0f}% de los registros — "
             f"las zonas sin dato pueden indicar envío gratis o limitaciones del scraper."
         )
 
@@ -453,9 +453,9 @@ def _render_dynamic_insights(df: pd.DataFrame, product_key: str) -> None:
                     f"(diferencia de ${diff:.0f}, {pct_diff:.0f}%)."
                 ),
                 "impacto": (
-                    f"Los usuarios price-sensitive migrarán hacia {PLATFORM_LABELS.get(cheapest, cheapest)}. "
+                    f"Los usuarios sensibles al precio migrarán hacia {PLATFORM_LABELS.get(cheapest, cheapest)}. "
                     f"Una diferencia del {pct_diff:.0f}% en costo total impacta directamente la tasa de conversión "
-                    f"y el market share en zonas competidas."
+                    f"y la cuota de mercado en zonas competidas."
                 ),
                 "recomendacion": (
                     "Revisar la estructura de precios y fees para ser competitivo en **costo total al usuario**, "
@@ -544,9 +544,9 @@ def _render_dynamic_insights(df: pd.DataFrame, product_key: str) -> None:
             if most_variable:
                 stats = fee_stats.loc[most_variable]
                 insights.append({
-                    "title": "Variabilidad geográfica del delivery fee",
+                    "title": "Variabilidad geográfica del costo de envío",
                     "finding": (
-                        f"{PLATFORM_LABELS.get(most_variable, most_variable)} tiene el fee de envío más variable: "
+                        f"{PLATFORM_LABELS.get(most_variable, most_variable)} tiene el costo de envío más variable: "
                         f"de ${stats['min']:.0f} a ${stats['max']:.0f} MXN (promedio ${stats['mean']:.0f}, "
                         f"desviación ${stats['std']:.1f})."
                     ),
@@ -565,9 +565,9 @@ def _render_dynamic_insights(df: pd.DataFrame, product_key: str) -> None:
             free_count = (fee_data[fee_data["platform"] == plat]["delivery_fee"] == 0).sum()
             free_pct = free_count / stats["count"] * 100 if stats["count"] > 0 else 0
             insights.append({
-                "title": f"Patrón de delivery fee en {PLATFORM_LABELS.get(plat, plat)}",
+                "title": f"Patrón de costo de envío en {PLATFORM_LABELS.get(plat, plat)}",
                 "finding": (
-                    f"El delivery fee de {PLATFORM_LABELS.get(plat, plat)} promedia ${stats['mean']:.0f} MXN "
+                    f"El costo de envío de {PLATFORM_LABELS.get(plat, plat)} promedia ${stats['mean']:.0f} MXN "
                     f"(rango: ${stats['min']:.0f}–${stats['max']:.0f}). "
                     f"El {free_pct:.0f}% de los scrapes muestra envío gratis."
                 ),
@@ -678,16 +678,16 @@ def _render_dynamic_insights(df: pd.DataFrame, product_key: str) -> None:
     # ── Render ────────────────────────────────────────────────────────
     if not insights:
         st.info(
-            "No hay suficientes datos para generar insights automáticos. "
+            "No hay suficientes datos para generar hallazgos automáticos. "
             "Ejecuta el scraper para al menos 1 plataforma con datos exitosos."
         )
         return
 
     for i, insight in enumerate(insights):
-        with st.expander(f"Insight {i + 1}: {insight['title']}", expanded=True):
-            st.markdown(f"**Finding:** {insight['finding']}")
+        with st.expander(f"Hallazgo {i + 1}: {insight['title']}", expanded=True):
+            st.markdown(f"**Hallazgo:** {insight['finding']}")
             st.markdown(f"**Impacto:** {insight['impacto']}")
-            st.markdown(f"**Recomendacion:** {insight['recomendacion']}")
+            st.markdown(f"**Recomendación:** {insight['recomendacion']}")
 
 
 # ---------------------------------------------------------------------------
@@ -828,13 +828,13 @@ socioeconomica: Polanco (premium), Condesa/Roma (alta competencia), Centro Histo
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    st.title("Competitive Intelligence Dashboard")
+    st.title("Panel de Inteligencia Competitiva")
     st.caption("Rappi vs Uber Eats vs DiDi Food — CDMX, México")
 
     df_raw = load_data()
     df_filtered, selected_product = render_sidebar(df_raw)
 
-    tab1, tab2 = st.tabs(["Datos & Scraping", "Insights Competitivos"])
+    tab1, tab2 = st.tabs(["Datos & Scraping", "Hallazgos Competitivos"])
 
     with tab1:
         render_tab_data(df_filtered)

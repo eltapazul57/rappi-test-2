@@ -183,7 +183,7 @@ def chart_fee_comparison(
 
     if prepared.empty:
         fig = go.Figure()
-        fig.add_annotation(text="Sin datos de delivery fee", showarrow=False)
+        fig.add_annotation(text="Sin datos de costo de envío", showarrow=False)
         return fig
 
     color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in prepared["platform"].values}
@@ -197,14 +197,14 @@ def chart_fee_comparison(
         points="all",
         labels={
             "platform_label": "Plataforma",
-            "delivery_fee": "Delivery Fee (MXN)",
+            "delivery_fee": "Costo de Envío (MXN)",
         },
-        title=title or "Distribución de Delivery Fees",
+        title=title or "Distribución de Costos de Envío",
     )
 
     fig.update_layout(
         xaxis_title="",
-        yaxis_title="Fee (MXN)",
+        yaxis_title="Costo de Envío (MXN)",
         showlegend=False,
         height=400,
     )
@@ -253,7 +253,7 @@ def chart_price_breakdown(
         ))
         # Fee bar (lighter, stacked)
         fig.add_trace(go.Bar(
-            name=f"{label} — Fee",
+            name=f"{label} — Envío",
             x=plat_data["zone_label"],
             y=plat_data["delivery_fee"].fillna(0),
             marker_color=color,
@@ -306,7 +306,7 @@ def chart_data_quality(df: pd.DataFrame, title: str | None = None) -> go.Figure:
             pct = filled.sum() / total * 100 if total > 0 else 0
             col_label = {
                 "price": "Precio",
-                "delivery_fee": "Delivery Fee",
+                "delivery_fee": "Costo de Envío",
                 "estimated_time_min": "ETA",
                 "promotions": "Promociones",
             }.get(col, col)

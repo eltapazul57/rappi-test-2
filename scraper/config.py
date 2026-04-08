@@ -148,7 +148,7 @@ PLATFORMS: list[str] = ["rappi", "uber_eats", "didi_food"]
 PLATFORM_BASE_URLS: dict[str, str] = {
     "rappi": "https://www.rappi.com.mx",
     "uber_eats": "https://www.ubereats.com/mx",
-    "didi_food": "https://food.didiglobal.com",
+    "didi_food": "https://www.didi-food.com/es-MX/food/",
 }
 
 # User-Agent realista — se rota aleatoriamente en utils.py

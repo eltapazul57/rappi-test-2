@@ -61,18 +61,18 @@ def generate_insights_with_ai(df: pd.DataFrame, context_summary: str = "") -> st
 
     prompt = f"""
     Eres un Analista Principal de Negocios y Estratega de Pricing para Plataformas de Delivery (Rappi, Uber Eats, DiDi Food).
-    Tu objetivo es analizar un extracto de datos competitivos recolectados mediante web scraping y generar Top 5 insights accionables directos al C-Level.
+    Tu objetivo es analizar un extracto de datos competitivos recolectados mediante web scraping y generar los 5 hallazgos accionables más importantes, dirigidos al nivel directivo.
 
     Datos en crudo del estudio (ya promediados para tu facilidad):
     {data_context}
 
     Instrucciones formativas:
-    1. Basado exhaustivamente en estos números, redacta *exactamente* 5 Insights.
+    1. Basado exhaustivamente en estos números, redacta *exactamente* 5 hallazgos.
     2. Usa lenguaje de negocios, orientado a acciones de crecimiento, logística y fidelización de mercantes y usuarios.
     3. Cada insight debe constar de estos 3 párrafos claramente resaltados (en viñetas):
-       - **Finding**: Qué está pasando, sustentado con números explícitos provenientes de la tabla.
+       - **Hallazgo**: Qué está pasando, sustentado con números explícitos provenientes de la tabla.
        - **Impacto**: Por qué le importa a la cuota de mercado, márgenes, elasticidad o retención.
-       - **Recomendación**: Qué debes modificar ya mismo en la app, la estructura de fees o partnerships.
+       - **Recomendación**: Qué debes modificar ya mismo en la app, la estructura de costos de envío o alianzas comerciales.
     4. Sé muy conciso pero contundente; no añadas preludios redundantes. Escribe todo en español neutro. No inventes números fuera de la tabla.
     """
 
