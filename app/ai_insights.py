@@ -5,8 +5,11 @@ ai_insights.py - Generación de insights con LLM de OpenAI
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
+
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 # Intentar importar librerías opcionales para IA
 try:
@@ -19,7 +22,7 @@ def is_ai_ready() -> bool:
     """Verifica si openai está instalado y hay una API KEY en .env o entorno."""
     if not HAS_OPENAI:
         return False
-    load_dotenv()
+    load_dotenv(_ENV_PATH)
     return bool(os.getenv("OPENAI_API_KEY"))
 
 def generate_insights_with_ai(df: pd.DataFrame, context_summary: str = "") -> str:
@@ -29,7 +32,7 @@ def generate_insights_with_ai(df: pd.DataFrame, context_summary: str = "") -> st
     if not is_ai_ready():
         return "La librería openai no está instalada o falta OPENAI_API_KEY en .env."
 
-    load_dotenv()
+    load_dotenv(_ENV_PATH)
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     # Filtramos la información relevante para no gastar demasiados tokens

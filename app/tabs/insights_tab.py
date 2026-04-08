@@ -9,7 +9,7 @@ from app.charts import (
     ZONE_LABELS,
     chart_total_cost_by_zone,
     chart_eta_heatmap,
-    chart_fee_comparison,
+    chart_price_by_product,
     chart_price_breakdown,
     chart_data_quality,
 )
@@ -64,9 +64,9 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
             st.error(f"Error: {exc}")
 
     with col_c3:
-        st.markdown("#### 3. Distribución de Costos de Envío (todos los productos)")
+        st.markdown("#### 3. Precio Promedio por Producto (todas las zonas)")
         try:
-            fig3 = chart_fee_comparison(df)
+            fig3 = chart_price_by_product(df)
             st.plotly_chart(fig3, use_container_width=True)
         except Exception as exc:
             st.error(f"Error: {exc}")
@@ -92,7 +92,7 @@ def render_tab_insights(df: pd.DataFrame, selected_product: str) -> None:
     st.divider()
 
     # ── AI Insights (opcional) ────────────────────────────────────────
-    with st.expander("Análisis con IA (opcional — requiere clave de API de OpenAI)"):
+    with st.expander("Análisis con IA"):
         if is_ai_ready():
             st.markdown(
                 "Genera un análisis estratégico adicional alimentando un LLM "

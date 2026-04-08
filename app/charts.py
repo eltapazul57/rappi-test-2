@@ -173,39 +173,55 @@ def chart_eta_heatmap(
     return fig
 
 
-def chart_fee_comparison(
+def chart_price_by_product(
     df: pd.DataFrame,
     title: str | None = None,
 ) -> go.Figure:
-    """Box plot: distribución de delivery fees por plataforma."""
+    """Barras agrupadas: precio promedio por producto y plataforma."""
     prepared = _prepare_df(df)
-    prepared = prepared.dropna(subset=["delivery_fee"])
 
     if prepared.empty:
         fig = go.Figure()
-        fig.add_annotation(text="Sin datos de costo de envío", showarrow=False)
+        fig.add_annotation(text="Sin datos", showarrow=False)
         return fig
 
-    color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in prepared["platform"].values}
+    avg = (
+        prepared.groupby(["platform", "product"])["price"]
+        .mean()
+        .round(2)
+        .reset_index()
+    )
+    avg["platform_label"] = avg["platform"].map(PLATFORM_LABELS).fillna(avg["platform"])
+    avg["product_label"] = avg["product"].map(PRODUCT_LABELS).fillna(avg["product"])
 
-    fig = px.box(
-        prepared,
-        x="platform_label",
-        y="delivery_fee",
+    # Orden de productos consistente
+    product_order = [PRODUCT_LABELS[k] for k in ["big_mac", "whopper", "pizza_pepperoni", "coca_cola_600ml", "coca_cola_600ml_711"] if k in avg["product"].values]
+    avg["product_label"] = pd.Categorical(avg["product_label"], categories=product_order, ordered=True)
+    avg = avg.sort_values("product_label")
+
+    color_map = {PLATFORM_LABELS[k]: v for k, v in PLATFORM_COLORS.items() if k in avg["platform"].values}
+
+    fig = px.bar(
+        avg,
+        x="product_label",
+        y="price",
         color="platform_label",
+        barmode="group",
         color_discrete_map=color_map,
-        points="all",
+        text=avg["price"].apply(lambda x: f"${x:.0f}"),
         labels={
+            "product_label": "Producto",
+            "price": "Precio Promedio (MXN)",
             "platform_label": "Plataforma",
-            "delivery_fee": "Costo de Envío (MXN)",
         },
-        title=title or "Distribución de Costos de Envío",
+        title=title or "Precio Promedio por Producto",
     )
 
+    fig.update_traces(textposition="outside")
     fig.update_layout(
         xaxis_title="",
-        yaxis_title="Costo de Envío (MXN)",
-        showlegend=False,
+        yaxis_title="Precio Promedio (MXN)",
+        legend_title="Plataforma",
         height=400,
     )
 
