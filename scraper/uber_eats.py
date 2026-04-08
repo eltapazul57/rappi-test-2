@@ -54,11 +54,17 @@ logger = logging.getLogger(__name__)
 SEARCH_TERMS: dict[str, list[str]] = {
     "big_mac": ["McDonald's"],
     "coca_cola_600ml": ["Coca-Cola 600ml", "Coca Cola 600"],
+    "whopper": ["Burger King"],
+    "pizza_pepperoni": ["Little Caesars", "Little Caesar", "Little Caesars Pizza"],
+    "coca_cola_600ml_711": ["7 Eleven", "7-Eleven"],
 }
 
 PRODUCT_MATCH_PATTERNS: dict[str, list[str]] = {
     "big_mac": ["Big Mac"],
     "coca_cola_600ml": ["Coca-Cola 600", "Coca Cola 600", "Coca.Cola.*600", "600.*[Cc]oca"],
+    "whopper": ["Whopper"],
+    "pizza_pepperoni": ["Pizza Pepperoni", "Pepperoni", "Hot N Ready Pepperoni"],
+    "coca_cola_600ml_711": ["Coca-Cola 600", "Coca Cola 600", "Coca.Cola.*600", "600.*[Cc]oca"],
 }
 
 
@@ -79,6 +85,7 @@ class UberEatsScraper(AbstractScraper):
         self._search_eta = None
         self._search_fee = None
         self._search_promo = ""
+        self._reset_context()
 
     # ------------------------------------------------------------------
     # Setup / Teardown
@@ -96,8 +103,6 @@ class UberEatsScraper(AbstractScraper):
             user_agent=get_random_user_agent(),
             locale="es-MX",
             timezone_id="America/Mexico_City",
-            geolocation={"latitude": 19.4326, "longitude": -99.1332},
-            permissions=["geolocation"],
             extra_http_headers={"Accept-Language": "es-MX,es;q=0.9,en-US;q=0.8"},
         )
         self._context.add_init_script(
@@ -123,6 +128,27 @@ class UberEatsScraper(AbstractScraper):
                 self._playwright.stop()
         except Exception:
             pass
+
+    def _reset_context(self) -> None:
+        for resource in (getattr(self, "_page", None), getattr(self, "_context", None)):
+            try:
+                if resource:
+                    resource.close()
+            except Exception:
+                pass
+        self._context = self._browser.new_context(
+            viewport={"width": 1366, "height": 768},
+            user_agent=get_random_user_agent(),
+            locale="es-MX",
+            timezone_id="America/Mexico_City",
+            extra_http_headers={"Accept-Language": "es-MX,es;q=0.9,en-US;q=0.8"},
+        )
+        self._context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        self._page = self._context.new_page()
+        self._page.set_default_timeout(REQUEST_TIMEOUT_MS)
+        logger.info("UberEatsScraper: contexto reiniciado")
 
     # ------------------------------------------------------------------
     # Helpers

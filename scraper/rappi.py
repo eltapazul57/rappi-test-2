@@ -45,24 +45,36 @@ logger = logging.getLogger(__name__)
 STORE_SEARCH: dict[str, str] = {
     "big_mac": "McDonald's",
     "coca_cola_600ml": "OXXO",
+    "whopper": "Burger King",
+    "pizza_pepperoni": "Little Caesars",
+    "coca_cola_600ml_711": "7 Eleven",
 }
 
 # Patrones para encontrar el producto dentro del menú de la tienda
 PRODUCT_MATCH_PATTERNS: dict[str, list[str]] = {
     "big_mac": [r"Big Mac\b"],
     "coca_cola_600ml": [r"Coca[\s\-]Cola.*600", r"Coca.*Cola.*600", r"600.*[Cc]oca"],
+    "whopper": [r"Whopper\b", r"Whopper con Queso"],
+    "pizza_pepperoni": [r"Pizza Pepperoni", r"Pepperoni.*Grande", r"Hot.*Ready.*Pepperoni", r"Pepperoni"],
+    "coca_cola_600ml_711": [r"Coca[\s\-]Cola.*600", r"Coca.*Cola.*600", r"600.*[Cc]oca"],
 }
 
 # Precio máximo razonable por producto (para descartar falsos positivos)
 PRICE_CEILING: dict[str, float] = {
     "big_mac": 300.0,
     "coca_cola_600ml": 80.0,
+    "whopper": 300.0,
+    "pizza_pepperoni": 300.0,
+    "coca_cola_600ml_711": 80.0,
 }
 
 # Precio mínimo razonable por producto
 PRICE_FLOOR: dict[str, float] = {
     "big_mac": 80.0,
     "coca_cola_600ml": 15.0,
+    "whopper": 80.0,
+    "pizza_pepperoni": 50.0,
+    "coca_cola_600ml_711": 15.0,
 }
 
 
@@ -83,6 +95,7 @@ class RappiScraper(AbstractScraper):
         self._store_fee = None
         self._store_eta = None
         self._store_promo = ""
+        self._reset_context()
 
     # ------------------------------------------------------------------
     # Setup / Teardown
@@ -100,8 +113,6 @@ class RappiScraper(AbstractScraper):
             user_agent=get_random_user_agent(),
             locale="es-MX",
             timezone_id="America/Mexico_City",
-            geolocation={"latitude": 19.4326, "longitude": -99.1332},
-            permissions=["geolocation"],
         )
         self._context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -152,8 +163,6 @@ class RappiScraper(AbstractScraper):
             user_agent=get_random_user_agent(),
             locale="es-MX",
             timezone_id="America/Mexico_City",
-            geolocation={"latitude": 19.4326, "longitude": -99.1332},
-            permissions=["geolocation"],
         )
         self._context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -285,8 +294,6 @@ class RappiScraper(AbstractScraper):
             'header [data-testid*="location"]',
             'header button:has([data-icon*="pin"])',
             'header button:has([data-icon*="location"])',
-            # Fallback genérico: el texto de la dirección actual en el header es un botón/link
-            'header button:has(svg)',
             '[class*="address-bar"]',
             '[class*="location-bar"]',
             '[class*="delivery-address"]',
@@ -352,10 +359,19 @@ class RappiScraper(AbstractScraper):
 
         search_input.scroll_into_view_if_needed(timeout=3000)
         search_input.click(timeout=5000)
-        page.wait_for_timeout(400)
-        search_input.fill("", timeout=5000)
-        page.wait_for_timeout(200)
-        search_input.type(store_name, delay=60)
+        page.wait_for_timeout(1000)
+        
+        # Al hacer click, Rappi abre un modal/overlay con un *nuevo* input. 
+        # El primero queda oculto, lo que causaba el error de 'element is not visible' al hacer fill().
+        active_search = page.locator('input[type="search"]:visible, input[placeholder*="Buscar"]:visible').last
+        try:
+            active_search.fill("", timeout=5000)
+            page.wait_for_timeout(300)
+            active_search.type(store_name, delay=60)
+        except Exception as exc:
+            logger.warning("Rappi: falló método fill en nuevo input, usando teclado crudo. Detalles: %s", exc)
+            page.keyboard.type(store_name, delay=60)
+        
         random_delay(min_seconds=1.5, max_seconds=2.5)
         page.keyboard.press("Enter")
         random_delay(min_seconds=3.0, max_seconds=5.0)

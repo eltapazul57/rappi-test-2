@@ -114,6 +114,21 @@ PRODUCTS: list[Product] = [
         display_name="Coca-Cola 600ml",
         category="convenience",
     ),
+    Product(
+        key="whopper",
+        display_name="Whopper",
+        category="restaurant",
+    ),
+    Product(
+        key="pizza_pepperoni",
+        display_name="Pizza Pepperoni",
+        category="restaurant",
+    ),
+    Product(
+        key="coca_cola_600ml_711",
+        display_name="Coca-Cola 600ml",
+        category="convenience",
+    ),
 ]
 
 PRODUCT_BY_KEY: dict[str, Product] = {p.key: p for p in PRODUCTS}
